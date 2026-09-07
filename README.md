@@ -374,4 +374,4 @@ See `docs/adr/`:
 
 ## Licence
 
-MIT
+MIT. See [LICENSE](LICENSE).
