@@ -104,4 +104,6 @@ func (s *Service) Delete(ctx context.Context, key domain.Key) error {
 	return err
 }
 
+func (s *Service) Watch(context.Context, domain.Namespace) (<-chan domain.SecretEvent, error)
+
 var _ ports.SecretStore = (*Service)(nil)

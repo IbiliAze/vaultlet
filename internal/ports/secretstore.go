@@ -13,8 +13,9 @@ var ErrNotFound = errors.New("secret not found")
 var ErrReadOnly = errors.New("store is read-only")
 
 type SecretStore interface {
-	Get(ctx context.Context, key domain.Key) (domain.Secret, error)
-	Put(ctx context.Context, key domain.Key, value []byte) (domain.SecretMeta, error)
-	List(ctx context.Context, ns domain.Namespace) ([]domain.SecretMeta, error)
-	Delete(ctx context.Context, key domain.Key) error
+	Get(context.Context, domain.Key) (domain.Secret, error)
+	Put(context.Context, domain.Key, []byte) (domain.SecretMeta, error)
+	List(context.Context, domain.Namespace) ([]domain.SecretMeta, error)
+	Delete(context.Context, domain.Key) error
+	Watch(context.Context, domain.Namespace) (<-chan domain.SecretEvent, error)
 }

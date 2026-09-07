@@ -67,6 +67,8 @@ func (f *fakeStore) Delete(_ context.Context, key domain.Key) error {
 	return nil
 }
 
+func (f *fakeStore) Watch(context.Context, domain.Namespace) (<-chan domain.SecretEvent, error)
+
 func TestServiceList(t *testing.T) {
 	// Three secrets across three namespaces so the filter loop has
 	// something to keep and something to drop.

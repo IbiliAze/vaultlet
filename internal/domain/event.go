@@ -1,3 +1,4 @@
+package domain
 
 type Type string
 
@@ -7,3 +8,5 @@ const (
 	Deleted Type = "deleted"
 	InSync  Type = "inSync"
 )
+
+type SecretEvent struct{}
