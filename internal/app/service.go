@@ -107,11 +107,19 @@ func (s *Service) Delete(ctx context.Context, key domain.Key) error {
 func (s *Service) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.SecretEvent, error) {
 	principal, ok := PrincipalFromContext(ctx)
 	if !ok || !s.policy.canList(principal, ns) {
-		audit(ctx, principal, ActionList, ns.String(), "deny", "denied")
+		audit(ctx, principal, ActionWatch, ns.String(), "deny", "denied")
 		return nil, ErrPermissionDenied
 	}
 
-	return nil, nil
+	c, err := s.store.Watch(ctx, ns)
+
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+	}
+
+	audit(ctx, principal, ActionWatch, ns.String(), "allow", outcome)
+	return c, nil
 }
 
 var _ ports.SecretStore = (*Service)(nil)

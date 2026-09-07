@@ -9,6 +9,7 @@ import (
 	"github.com/IbiliAze/vaultlet/internal/app"
 	"github.com/IbiliAze/vaultlet/internal/domain"
 	"github.com/IbiliAze/vaultlet/internal/ports"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -143,4 +144,20 @@ func (s *Server) DeleteSecret(ctx context.Context, req *vaultletv1.DeleteSecretR
 	}
 
 	return &vaultletv1.DeleteSecretResponse{}, nil
+}
+
+func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.ServerStreamingServer[vaultletv1.WatchSecretsResponse]) error {
+	var ns domain.Namespace
+	if req.Namespace != "" {
+		parsed, err := domain.ParseNamespace(req.Namespace)
+		if err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
+		ns = parsed
+	}
+
+	ctx := context.Background()
+
+	_, err := s.store.Watch(ctx, ns)
+	return err
 }

@@ -271,7 +271,15 @@ func (s *Store) Delete(ctx context.Context, key domain.Key) error {
 	return nil
 }
 
-func (s *Store) Watch(context.Context, domain.Namespace) (<-chan domain.SecretEvent, error)
+func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.SecretEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c := make(chan domain.SecretEvent)
+
+	return c, nil
+}
 
 func optional(s string) *string {
 	if s == "" {
