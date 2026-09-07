@@ -25,5 +25,8 @@ func (c Config) Validate() error {
 	if c.OrgID == "" {
 		return errors.New("bitwarden: org_id required")
 	}
+	if c.PollInterval == 0 {
+		return errors.New("bitwarden: poll_interval required")
+	}
 	return nil
 }

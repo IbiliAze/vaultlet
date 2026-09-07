@@ -9,4 +9,7 @@ const (
 	InSync  Type = "inSync"
 )
 
-type SecretEvent struct{}
+type SecretEvent struct {
+	Type
+	Meta SecretMeta
+}
