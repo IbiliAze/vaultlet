@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+var minPollInterval = time.Second
+
 type Config struct {
 	APIURL       string        `koanf:"api_url"`
 	OrgID        string        `koanf:"org_id"`
@@ -29,7 +31,7 @@ func (c Config) Validate() error {
 	if c.PollInterval == 0 {
 		return errors.New("bitwarden: poll_interval required")
 	}
-	if c.PollInterval < time.Second {
+	if c.PollInterval < minPollInterval {
 		return fmt.Errorf("bitwarden: poll_interval must be at least %s", minPollInterval)
 	}
 	return nil
