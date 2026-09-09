@@ -85,3 +85,16 @@ func (p Policy) canList(principal string, ns domain.Namespace) bool {
 	}
 	return false
 }
+
+func (p Policy) canWatch(principal string, ns domain.Namespace) bool {
+	for _, r := range p[principal] {
+		if !r.actions[ActionWatch] {
+			continue
+		}
+
+		if r.namespace.Contains(ns) || ns.Contains(r.namespace) {
+			return true
+		}
+	}
+	return false
+}

@@ -277,22 +277,24 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 		return nil, err
 	}
 
-	metas, err := s.List(ctx, ns)
-	if err != nil {
-		ctx.Done()
-		return nil, err
-	}
-
 	mMap := make(map[string]domain.SecretMeta)
 	c := make(chan domain.SecretEvent)
-	for _, meta := range metas {
-		mMap[meta.Key.String()] = meta
-		c <- domain.SecretEvent{Type: domain.Added, Meta: meta}
-	}
-
-	c <- domain.SecretEvent{Type: domain.InSync}
 
 	go func(c chan domain.SecretEvent) {
+		defer close(c)
+
+		metas, err := s.List(ctx, ns)
+		if err != nil {
+			ctx.Done()
+			return
+		}
+		for _, meta := range metas {
+			mMap[meta.Key.String()] = meta
+			c <- domain.SecretEvent{Type: domain.Added, Meta: meta}
+		}
+
+		c <- domain.SecretEvent{Type: domain.InSync}
+
 		ticker := time.NewTicker(s.pollingInterval)
 		defer ticker.Stop()
 
@@ -312,15 +314,24 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 
 					case true:
 						if existingMeta.Version != meta.Version {
-							mMap[existingMeta.Key.String()] = meta
+							mMap[meta.Key.String()] = meta
 							c <- domain.SecretEvent{Type: domain.Updated, Meta: meta}
-
-						} else {
-							c <- domain.SecretEvent{Type: domain.InSync}
 						}
 					}
 
 				}
+
+				for _, meta := range mMap {
+					if !slices.ContainsFunc(metas, func(m domain.SecretMeta) bool {
+						return m.Key.String() == meta.Key.String()
+					}) {
+						c <- domain.SecretEvent{
+							Type: domain.Deleted,
+							Meta: meta,
+						}
+					}
+				}
+
 				if err != nil {
 					ctx.Done()
 					return
