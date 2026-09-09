@@ -13,12 +13,13 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 ### 1.1 WatchSecrets is scaffolded, not working
 
-- [ ] In progress. Status as of 2026-09-09 (`47f9671` plus an uncommitted
-      poller draft in `bitwarden.go`). Every layer has a `Watch` signature
-      and the tree builds, but no event has ever reached a client: the
-      poller draft deadlocks before returning, and the gRPC handler still
-      discards the channel. `go test ./...` fails to compile `internal/app`
-      because the fake store's `Watch` has no body.
+- [ ] In progress. Status as of 2026-09-09 (`f1b74c3` plus uncommitted
+      changes). The path is wired end to end for the first time: the poller
+      emits snapshot, `InSync`, `Added`, `Updated` and `Deleted`, and the
+      gRPC handler ranges over the channel and calls `Send`. `go test ./...`
+      passes again. Not yet verified against a live server. What remains is
+      correctness under failure (poll errors, client disconnects), the
+      `IN_SYNC` wire shape, and event filtering in the app layer.
 
 Purpose: a workload subscribes to a namespace once and is told when a secret
 under it changes, instead of polling `List` or restarting on rotation. Events
@@ -45,60 +46,61 @@ Checklist:
       `InSync` then live events, channel closed on cancellation or backend
       failure, no indefinite block on a slow consumer. Write it on the
       interface.
-- [ ] **Fix the test fake.** `fakeStore.Watch` in `service_test.go:70` is a
-      declaration without a body, so the app package does not compile under
-      test. Return a closed channel or a small buffered one.
-- [ ] **Polling loop.** A first draft is in the working tree
-      (`bitwarden.go:274`). The map, ticker and version comparison are the
-      right shape. What must change before it can run:
-      - The initial snapshot sends on the unbuffered channel *before*
-        `Watch` returns it, so the first `c <- ...` blocks forever and no
-        caller ever gets the channel. Move the snapshot inside the
-        goroutine; `Watch` should only create the channel, start the
-        goroutine, and return.
-      - The channel is never closed. `defer close(c)` at the top of the
-        goroutine, so the handler's receive loop ends when `ctx` does.
-      - Every send must `select` on `ctx.Done()` as well, otherwise a
-        client that disconnects mid-send leaks the goroutine.
-      - `ctx.Done()` as a bare statement does nothing; it returns a
-        channel. Delete both occurrences.
-      - `InSync` is emitted on every unchanged key on every tick. The proto
-        allows exactly one, after the snapshot. Drop the `else` branch.
-      - `Deleted` is never emitted. After walking the fresh list, any key
-        still in the map but absent from the list is gone: emit `Deleted`
-        with the stored meta and remove it from the map.
-      - A failed poll returns from the goroutine, tearing the stream down
-        on a transient error. Log it and wait for the next tick instead.
-      - `time.NewTicker` panics on a non-positive interval; the config
-        floor below is what protects it.
-      - Style: `switch exists { case false: ... case true: ... }` is an
-        `if`/`else`; `mMap[existingMeta.Key.String()]` is the same key as
-        `meta.Key.String()`.
+- [x] **Fix the test fake.** `fakeStore.Watch` has a body and counts calls
+      (uncommitted). It returns `nil, nil` on success, which is a nil channel;
+      ranging over it blocks forever, so the first `Service.Watch` test that
+      consumes the result will hang. Return a closed channel instead.
+- [ ] **Polling loop.** `bitwarden.go:275`. `Deleted` keys are now removed
+      from `mMap` (`f1b74c3`). Two bugs remain, one of them serious:
+      - The poll error is checked *after* the diff. A failed `List` leaves
+        `metas` nil, so every known key is emitted as `Deleted`, removed
+        from the map, and then the goroutine returns and closes the stream.
+        One transient Bitwarden error tells every client its secrets are
+        gone. Check `err` immediately after `List`, log it, `continue`, and
+        leave the map untouched.
+      - Sends do not `select` on `ctx.Done()`. Once the handler returns
+        (see below), gRPC cancels the context, but a goroutine parked on
+        `c <- ev` never sees it and leaks. A small `emit(ev) bool` helper
+        that selects on send vs `ctx.Done()` fixes all six sites.
+      - The two bare `ctx.Done()` statements still do nothing.
+      - Minor: `switch exists { case false / case true }` is an `if`/`else`;
+        the `Deleted` scan is O(n·m), a set of fresh keys makes it linear.
 - [x] **Poll interval.** `Config.Validate` requires `poll_interval`
       (`1dd3f01`) and the draft threads it into `Store.pollingInterval`.
       Still needs a floor (1s or so) so a typo cannot hammer the backend or
       panic the ticker.
-- [ ] **App layer.** `Service.Watch` exists but has three problems. It gates
-      on `canList`, so a principal with `watch` but not `list` is denied and
-      vice versa; add a `canWatch` or generalise `canList` over an action.
-      When the store returns an error it audits `error` and then returns
-      `c, nil`, handing the caller a nil channel with no error. And events
-      are not filtered: a subscriber to an ancestor namespace receives every
-      key beneath it, where `List` filters each result by policy. Wrap the
-      store's channel and drop events the principal may not see.
-- [ ] **gRPC handler.** `WatchSecrets` in `handlers.go:149` uses
-      `context.Background()` instead of `server.Context()`, so the principal
-      set by `streamAuth` is lost and every call is denied; it also ignores
-      client cancellation. The raw `ErrPermissionDenied` is returned without
-      mapping to `PERMISSION_DENIED`, and the channel is discarded without a
-      receive loop. Needs: stream context, error mapping as in
-      `ListSecrets`, a `for ev := range c` loop translating to
-      `vaultletv1.SecretEvent` and calling `Send`, and `nil` on cancellation.
-- [ ] **Tests.** Store loop against a fake `List`: snapshot then `InSync`,
-      each diff case, cancellation closes the channel, failed poll does not.
-      Service: denied subscribe never reaches the store, ancestor filtering,
-      one audit record. Handler: event mapping, `PERMISSION_DENIED`,
-      cancellation returns `nil`.
+- [ ] **App layer.** `Service.Watch` now gates on `canWatchOrList`
+      (uncommitted), meaning `list` permission implies `watch`. That is a
+      policy decision, not a bug: events are metadata only, so a principal
+      who can `List` learns nothing new from `Watch`, but they do gain a
+      long-lived stream. If that is intended, say so in a comment on
+      `canWatchOrList` and in the README's policy section; otherwise revert
+      to `canWatch`. Still open either way: events are not filtered, so a
+      subscriber to an ancestor namespace receives every key beneath it,
+      where `List` filters each result by policy. Wrap the store's channel
+      in a goroutine that drops events the principal may not see. `canWatch`
+      is a copy of `canList` with one constant changed; a
+      `canAny(principal, action, ns)` would serve both.
+- [ ] **gRPC handler.** `WatchSecrets` now maps errors, ranges over the
+      channel and calls `Send` via a `mapEvent` switch (uncommitted). Three
+      fixes:
+      - `IN_SYNC` is sent with a non-nil `Meta` holding an empty key, empty
+        version and a zero `created_at`. The proto says meta is unset for
+        `IN_SYNC`, and the CLI's `printEvent` uses `GetMeta() == nil` to
+        recognise it, so today it prints `IN_SYNC` followed by two blanks.
+        Send `Meta: nil` when `ev.Type == domain.InSync`.
+      - The `server.Send` error is discarded. When the client goes away,
+        `Send` fails and the loop keeps draining the channel until the
+        poller notices the cancelled context, one tick later. Return the
+        error (or `nil` if `ctx.Err() != nil`) so the handler exits at once.
+      - The error log says `"list secrets"`; it should say `"watch secrets"`.
+      - Unrelated blank line added in `PutSecret`; drop it from the commit.
+- [ ] **Tests.** None for Watch yet. Store loop against a fake `List`:
+      snapshot then `InSync`, each diff case, cancellation closes the
+      channel, failed poll emits nothing and does not close. Service: denied
+      subscribe never reaches the store (`watchCalls == 0`), ancestor
+      filtering, one audit record. Handler: `mapEvent`, `IN_SYNC` has nil
+      meta, `PERMISSION_DENIED`, cancellation returns `nil`.
 - [ ] **Verify live** against Bitwarden: subscribe, edit a secret in the
       Bitwarden UI, confirm `UPDATED` arrives within one poll interval, and
       `vaultlet get` returns the new value.

@@ -321,10 +321,11 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 
 				}
 
-				for _, meta := range mMap {
+				for k, meta := range mMap {
 					if !slices.ContainsFunc(metas, func(m domain.SecretMeta) bool {
 						return m.Key.String() == meta.Key.String()
 					}) {
+						delete(mMap, k)
 						c <- domain.SecretEvent{
 							Type: domain.Deleted,
 							Meta: meta,

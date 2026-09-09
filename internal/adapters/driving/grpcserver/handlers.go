@@ -69,6 +69,7 @@ func (s *Server) PutSecret(ctx context.Context, req *vaultletv1.PutSecretRequest
 		if errors.Is(err, domain.ErrEmptyValue) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
+
 		slog.ErrorContext(ctx, "put secret", "key", key, "err", err)
 		return nil, status.Error(codes.Internal, "internal error")
 	}
@@ -158,7 +159,43 @@ func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.S
 
 	ctx := server.Context()
 
-	_, err := s.store.Watch(ctx, ns)
+	c, err := s.store.Watch(ctx, ns)
+	if err != nil {
+		if errors.Is(err, app.ErrPermissionDenied) {
+			return status.Error(codes.PermissionDenied, "permission denied")
+		}
 
-	return err
+		slog.ErrorContext(ctx, "list secrets", "err", err)
+		return status.Error(codes.Internal, "internal error")
+	}
+
+	for ev := range c {
+		server.Send(&vaultletv1.WatchSecretsResponse{
+			Event: &vaultletv1.SecretEvent{
+				Type: mapEvent(ev.Type),
+				Meta: &vaultletv1.SecretMeta{
+					Key:       ev.Meta.Key.String(),
+					Version:   ev.Meta.Version.String(),
+					CreatedAt: timestamppb.New(ev.Meta.CreatedAt),
+				},
+			},
+		})
+	}
+
+	return nil
+}
+
+func mapEvent(eventType domain.Type) vaultletv1.SecretEventType {
+	switch eventType {
+	case domain.Added:
+		return vaultletv1.SecretEventType_SECRET_EVENT_TYPE_ADDED
+	case domain.Updated:
+		return vaultletv1.SecretEventType_SECRET_EVENT_TYPE_UPDATED
+	case domain.Deleted:
+		return vaultletv1.SecretEventType_SECRET_EVENT_TYPE_DELETED
+	case domain.InSync:
+		return vaultletv1.SecretEventType_SECRET_EVENT_TYPE_IN_SYNC
+	}
+
+	return vaultletv1.SecretEventType_SECRET_EVENT_TYPE_UNSPECIFIED
 }

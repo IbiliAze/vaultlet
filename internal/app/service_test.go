@@ -20,6 +20,7 @@ type fakeStore struct {
 	listCalls   int
 	putCalls    int
 	deleteCalls int
+	watchCalls  int
 }
 
 func (f *fakeStore) Get(_ context.Context, key domain.Key) (domain.Secret, error) {
@@ -67,7 +68,13 @@ func (f *fakeStore) Delete(_ context.Context, key domain.Key) error {
 	return nil
 }
 
-func (f *fakeStore) Watch(context.Context, domain.Namespace) (<-chan domain.SecretEvent, error)
+func (f *fakeStore) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.SecretEvent, error) {
+	f.watchCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, nil
+}
 
 func TestServiceList(t *testing.T) {
 	// Three secrets across three namespaces so the filter loop has

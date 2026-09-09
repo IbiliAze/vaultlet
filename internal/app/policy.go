@@ -98,3 +98,7 @@ func (p Policy) canWatch(principal string, ns domain.Namespace) bool {
 	}
 	return false
 }
+
+func (p Policy) canWatchOrList(principal string, ns domain.Namespace) bool {
+	return p.canWatch(principal, ns) || p.canList(principal, ns)
+}

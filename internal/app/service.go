@@ -106,7 +106,7 @@ func (s *Service) Delete(ctx context.Context, key domain.Key) error {
 
 func (s *Service) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.SecretEvent, error) {
 	principal, ok := PrincipalFromContext(ctx)
-	if !ok || !s.policy.canWatch(principal, ns) {
+	if !ok || !s.policy.canWatchOrList(principal, ns) {
 		audit(ctx, principal, ActionWatch, ns.String(), "deny", "denied")
 		return nil, ErrPermissionDenied
 	}
