@@ -87,6 +87,10 @@ func (p Policy) canList(principal string, ns domain.Namespace) bool {
 }
 
 func (p Policy) canWatch(principal string, ns domain.Namespace) bool {
+	if !p.canList(principal, ns) {
+		return false
+	}
+
 	for _, r := range p[principal] {
 		if !r.actions[ActionWatch] {
 			continue
@@ -97,8 +101,4 @@ func (p Policy) canWatch(principal string, ns domain.Namespace) bool {
 		}
 	}
 	return false
-}
-
-func (p Policy) canWatchOrList(principal string, ns domain.Namespace) bool {
-	return p.canWatch(principal, ns) || p.canList(principal, ns)
 }

@@ -11,104 +11,66 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 ## 1. Functional gaps
 
-### 1.1 WatchSecrets is scaffolded, not working
+### 1.1 WatchSecrets works end to end, not yet hardened
 
-- [ ] In progress. Status as of 2026-09-09 (`f1b74c3` plus uncommitted
-      changes). The path is wired end to end for the first time: the poller
-      emits snapshot, `InSync`, `Added`, `Updated` and `Deleted`, and the
-      gRPC handler ranges over the channel and calls `Send`. `go test ./...`
-      passes again. Not yet verified against a live server. What remains is
-      correctness under failure (poll errors, client disconnects), the
-      `IN_SYNC` wire shape, and event filtering in the app layer.
+- [ ] In progress. Status as of 2026-09-09 (`7eb9b20` plus uncommitted
+      changes). Port, domain event, Bitwarden poller, `Service.Watch` with
+      policy and audit, and the streaming gRPC handler are all in place and
+      `go test ./...` passes. Not yet verified against a live server.
 
-Purpose: a workload subscribes to a namespace once and is told when a secret
-under it changes, instead of polling `List` or restarting on rotation. Events
-carry metadata only; the client reads a rotated value with `GetSecret`, so
-secret bytes stay on a path that is policy-checked and audited per read.
+Design as built: `Watch` sits directly on `ports.SecretStore`, not behind an
+optional `ports.Watcher` with a polling decorator as the README says. Every
+backend must therefore implement `Watch`, and the poll loop lives in the
+Bitwarden adapter. Accept that and fix the README, or extract the loop into
+`internal/adapters/driven/watch` before the AWS backend needs it.
 
-Design as built: `Watch` was added directly to `ports.SecretStore`
-(`63940c7`), not as an optional `ports.Watcher` with a polling decorator as the
-README describes. That means every backend must implement `Watch`, and a
-polling loop written inside the Bitwarden adapter will have to be duplicated
-or extracted when the AWS backend arrives. Either accept that and fix the
-README's Watch section, or move the loop into `internal/adapters/driven/watch`
-now while it is still empty. Decide before writing the loop.
+Policy as built: `canWatch` requires both `list` and `watch` on an
+overlapping namespace. Deliberate, but undocumented; add a comment on
+`canWatch` and a line in the README's policy section.
 
-Checklist:
+Remaining:
 
-- [x] **Domain.** `domain.SecretEvent` and the `Added` / `Updated` /
-      `Deleted` / `InSync` constants exist (`e2b841d`, `1dd3f01`). The enum is
-      named `domain.Type`, which reads poorly next to `domain.Key` and
-      `domain.Secret`; `EventType` would be clearer. The field is embedded
-      rather than named, which works but is unusual.
-- [x] **Port.** `Watch(ctx, ns) (<-chan domain.SecretEvent, error)` is on
-      `SecretStore`. The contract is not documented: snapshot then one
-      `InSync` then live events, channel closed on cancellation or backend
-      failure, no indefinite block on a slow consumer. Write it on the
-      interface.
-- [x] **Fix the test fake.** `fakeStore.Watch` has a body and counts calls
-      (uncommitted). It returns `nil, nil` on success, which is a nil channel;
-      ranging over it blocks forever, so the first `Service.Watch` test that
-      consumes the result will hang. Return a closed channel instead.
-- [ ] **Polling loop.** `bitwarden.go:275`. `Deleted` keys are now removed
-      from `mMap` (`f1b74c3`). Two bugs remain, one of them serious:
-      - The poll error is checked *after* the diff. A failed `List` leaves
-        `metas` nil, so every known key is emitted as `Deleted`, removed
-        from the map, and then the goroutine returns and closes the stream.
-        One transient Bitwarden error tells every client its secrets are
-        gone. Check `err` immediately after `List`, log it, `continue`, and
-        leave the map untouched.
-      - Sends do not `select` on `ctx.Done()`. Once the handler returns
-        (see below), gRPC cancels the context, but a goroutine parked on
-        `c <- ev` never sees it and leaks. A small `emit(ev) bool` helper
-        that selects on send vs `ctx.Done()` fixes all six sites.
-      - The two bare `ctx.Done()` statements still do nothing.
-      - Minor: `switch exists { case false / case true }` is an `if`/`else`;
-        the `Deleted` scan is O(n·m), a set of fresh keys makes it linear.
-- [x] **Poll interval.** `Config.Validate` requires `poll_interval`
-      (`1dd3f01`) and the draft threads it into `Store.pollingInterval`.
-      Still needs a floor (1s or so) so a typo cannot hammer the backend or
-      panic the ticker.
-- [ ] **App layer.** `Service.Watch` now gates on `canWatchOrList`
-      (uncommitted), meaning `list` permission implies `watch`. That is a
-      policy decision, not a bug: events are metadata only, so a principal
-      who can `List` learns nothing new from `Watch`, but they do gain a
-      long-lived stream. If that is intended, say so in a comment on
-      `canWatchOrList` and in the README's policy section; otherwise revert
-      to `canWatch`. Still open either way: events are not filtered, so a
-      subscriber to an ancestor namespace receives every key beneath it,
-      where `List` filters each result by policy. Wrap the store's channel
-      in a goroutine that drops events the principal may not see. `canWatch`
-      is a copy of `canList` with one constant changed; a
-      `canAny(principal, action, ns)` would serve both.
-- [ ] **gRPC handler.** `WatchSecrets` now maps errors, ranges over the
-      channel and calls `Send` via a `mapEvent` switch (uncommitted). Three
-      fixes:
-      - `IN_SYNC` is sent with a non-nil `Meta` holding an empty key, empty
-        version and a zero `created_at`. The proto says meta is unset for
-        `IN_SYNC`, and the CLI's `printEvent` uses `GetMeta() == nil` to
-        recognise it, so today it prints `IN_SYNC` followed by two blanks.
-        Send `Meta: nil` when `ev.Type == domain.InSync`.
-      - The `server.Send` error is discarded. When the client goes away,
-        `Send` fails and the loop keeps draining the channel until the
-        poller notices the cancelled context, one tick later. Return the
-        error (or `nil` if `ctx.Err() != nil`) so the handler exits at once.
-      - The error log says `"list secrets"`; it should say `"watch secrets"`.
-      - Unrelated blank line added in `PutSecret`; drop it from the commit.
-- [ ] **Tests.** None for Watch yet. Store loop against a fake `List`:
-      snapshot then `InSync`, each diff case, cancellation closes the
-      channel, failed poll emits nothing and does not close. Service: denied
-      subscribe never reaches the store (`watchCalls == 0`), ancestor
-      filtering, one audit record. Handler: `mapEvent`, `IN_SYNC` has nil
-      meta, `PERMISSION_DENIED`, cancellation returns `nil`.
-- [ ] **Verify live** against Bitwarden: subscribe, edit a secret in the
-      Bitwarden UI, confirm `UPDATED` arrives within one poll interval, and
-      `vaultlet get` returns the new value.
-- [ ] **Docs.** Reconcile the README's Watch section with whichever design
-      is kept, and drop the §1.4 note that watch policy/audit belongs here.
-
-Note that `versionAt` derives the version from `RevisionDate`, so an UPDATED
-event is detectable as a version change on an unchanged key.
+- [ ] **Poller error handling** (`bitwarden.go:275`). The poll error is
+      checked after the diff. A failed `List` leaves `metas` nil, so every
+      known key is emitted as `Deleted`, removed from the map, and the
+      goroutine exits. One transient Bitwarden error tells every client its
+      secrets are gone. Check `err` right after `List`, log it, `continue`,
+      leave the map untouched. The two bare `ctx.Done()` statements do
+      nothing; delete them.
+- [ ] **Poller sends must select on `ctx.Done()`.** The handler now returns
+      on a `Send` error, after which gRPC cancels the context, but a goroutine
+      parked on `c <- ev` never sees it and leaks. An `emit(ev) bool` helper
+      that selects on send vs `ctx.Done()` covers all six sites.
+- [ ] **`IN_SYNC` wire shape** (`handlers.go`). It is sent with a non-nil
+      `Meta` carrying an empty key, empty version and zero `created_at`. The
+      proto says meta is unset for `IN_SYNC` and the CLI keys on
+      `GetMeta() == nil`, so it currently prints `IN_SYNC` and two blanks.
+      Send `Meta: nil` when `ev.Type == domain.InSync`.
+- [ ] **Client disconnect is reported as `Internal`.** When the client goes
+      away, `Send` fails and the handler returns `codes.Internal`, so the
+      logging interceptor records an error for every normal disconnect.
+      Return `nil` when `ctx.Err() != nil`, the error otherwise.
+- [ ] **Event filtering.** `Service.Watch` checks the namespace once and
+      forwards every event. A subscriber to an ancestor namespace sees keys
+      it may not `List`. Wrap the channel in a goroutine that drops events
+      whose key falls outside a permitted rule, mirroring `List`.
+- [ ] **Poll interval floor.** `Validate` rejects zero but not a negative or
+      tiny value; `time.NewTicker` panics on non-positive. Enforce 1s or so.
+- [ ] **Test fake.** `fakeStore.Watch` returns a nil channel on success;
+      ranging over it blocks forever. Return a closed channel.
+- [ ] **Tests.** None for Watch yet. Poller against a fake `List`: snapshot
+      then `InSync`, each diff case, cancellation closes the channel, failed
+      poll emits nothing and does not close. Service: denied subscribe never
+      reaches the store, ancestor filtering, one audit record. Handler:
+      `mapEvent`, nil meta on `IN_SYNC`, `PERMISSION_DENIED`, cancellation
+      returns `nil`.
+- [ ] **Verify live** against Bitwarden: subscribe, edit a secret in the UI,
+      confirm `UPDATED` within one poll interval, `vaultlet get` returns the
+      new value, Ctrl-C ends the stream without a server-side error log.
+- [ ] **Docs and tidy.** Reconcile the README's Watch section with the design
+      kept; drop the §1.4 note that watch policy/audit belongs here; rename
+      `domain.Type` to `EventType`; replace `switch exists { case false /
+      case true }` with `if`/`else`; drop the stray blank line in `PutSecret`.
 
 ### 1.2 Compare-and-swap
 
@@ -321,4 +283,4 @@ whole point of the ports design and the best proof the abstraction holds.
 
 1. Domain, app and handler/interceptor tests, including the authorization and
    audit verification in §1.4.
-2. `WatchSecrets`, including the port change and the Bitwarden polling loop.
+2. Harden `WatchSecrets` per §1.1 and verify it live.

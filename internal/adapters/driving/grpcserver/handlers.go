@@ -165,12 +165,12 @@ func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.S
 			return status.Error(codes.PermissionDenied, "permission denied")
 		}
 
-		slog.ErrorContext(ctx, "list secrets", "err", err)
+		slog.ErrorContext(ctx, "watch secrets", "err", err)
 		return status.Error(codes.Internal, "internal error")
 	}
 
 	for ev := range c {
-		server.Send(&vaultletv1.WatchSecretsResponse{
+		err := server.Send(&vaultletv1.WatchSecretsResponse{
 			Event: &vaultletv1.SecretEvent{
 				Type: mapEvent(ev.Type),
 				Meta: &vaultletv1.SecretMeta{
@@ -180,6 +180,10 @@ func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.S
 				},
 			},
 		})
+
+		if err != nil {
+			return status.Error(codes.Internal, err.Error())
+		}
 	}
 
 	return nil
