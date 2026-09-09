@@ -280,6 +280,19 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 	mMap := make(map[string]domain.SecretMeta)
 	c := make(chan domain.SecretEvent)
 
+	// emit delivers ev unless the subscriber is gone. Without the select a
+	// goroutine parked on an unbuffered send would never observe ctx and
+	// would leak once the gRPC handler returns. It reports false when the
+	// caller should stop.
+	emit := func(ev domain.SecretEvent) bool {
+		select {
+		case c <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	go func(c chan domain.SecretEvent) {
 		defer close(c)
 
@@ -290,10 +303,14 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 		}
 		for _, meta := range metas {
 			mMap[meta.Key.String()] = meta
-			c <- domain.SecretEvent{Type: domain.Added, Meta: meta}
+			if !emit(domain.SecretEvent{Type: domain.Added, Meta: meta}) {
+				return
+			}
 		}
 
-		c <- domain.SecretEvent{Type: domain.InSync}
+		if !emit(domain.SecretEvent{Type: domain.InSync}) {
+			return
+		}
 
 		ticker := time.NewTicker(s.pollingInterval)
 		defer ticker.Stop()
@@ -310,12 +327,16 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 					switch exists {
 					case false:
 						mMap[meta.Key.String()] = meta
-						c <- domain.SecretEvent{Type: domain.Added, Meta: meta}
+						if !emit(domain.SecretEvent{Type: domain.Added, Meta: meta}) {
+							return
+						}
 
 					case true:
 						if existingMeta.Version != meta.Version {
 							mMap[meta.Key.String()] = meta
-							c <- domain.SecretEvent{Type: domain.Updated, Meta: meta}
+							if !emit(domain.SecretEvent{Type: domain.Updated, Meta: meta}) {
+								return
+							}
 						}
 					}
 
@@ -326,9 +347,8 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 						return m.Key.String() == meta.Key.String()
 					}) {
 						delete(mMap, k)
-						c <- domain.SecretEvent{
-							Type: domain.Deleted,
-							Meta: meta,
+						if !emit(domain.SecretEvent{Type: domain.Deleted, Meta: meta}) {
+							return
 						}
 					}
 				}

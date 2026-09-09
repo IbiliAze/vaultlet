@@ -14,7 +14,7 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 ### 1.1 WatchSecrets works end to end, not yet hardened
 
 - [ ] In progress. Status as of 2026-09-09 (`7eb9b20` plus uncommitted
-      changes). Port, domain event, Bitwarden poller, `Service.Watch` with
+      changes, including the `emit` helper so poller sends honour `ctx`). Port, domain event, Bitwarden poller, `Service.Watch` with
       policy and audit, and the streaming gRPC handler are all in place and
       `go test ./...` passes. Not yet verified against a live server.
 
@@ -37,10 +37,6 @@ Remaining:
       secrets are gone. Check `err` right after `List`, log it, `continue`,
       leave the map untouched. The two bare `ctx.Done()` statements do
       nothing; delete them.
-- [ ] **Poller sends must select on `ctx.Done()`.** The handler now returns
-      on a `Send` error, after which gRPC cancels the context, but a goroutine
-      parked on `c <- ev` never sees it and leaks. An `emit(ev) bool` helper
-      that selects on send vs `ctx.Done()` covers all six sites.
 - [ ] **`IN_SYNC` wire shape** (`handlers.go`). It is sent with a non-nil
       `Meta` carrying an empty key, empty version and zero `created_at`. The
       proto says meta is unset for `IN_SYNC` and the CLI keys on
@@ -54,8 +50,6 @@ Remaining:
       forwards every event. A subscriber to an ancestor namespace sees keys
       it may not `List`. Wrap the channel in a goroutine that drops events
       whose key falls outside a permitted rule, mirroring `List`.
-- [ ] **Poll interval floor.** `Validate` rejects zero but not a negative or
-      tiny value; `time.NewTicker` panics on non-positive. Enforce 1s or so.
 - [ ] **Test fake.** `fakeStore.Watch` returns a nil channel on success;
       ranging over it blocks forever. Return a closed channel.
 - [ ] **Tests.** None for Watch yet. Poller against a fake `List`: snapshot

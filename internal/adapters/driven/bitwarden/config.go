@@ -2,6 +2,7 @@ package bitwarden
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -27,6 +28,9 @@ func (c Config) Validate() error {
 	}
 	if c.PollInterval == 0 {
 		return errors.New("bitwarden: poll_interval required")
+	}
+	if c.PollInterval < time.Second {
+		return fmt.Errorf("bitwarden: poll_interval must be at least %s", minPollInterval)
 	}
 	return nil
 }
