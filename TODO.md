@@ -11,77 +11,102 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 ## 1. Functional gaps
 
-### 1.1 WatchSecrets is unimplemented
+### 1.1 WatchSecrets is scaffolded, not working
 
-- [ ] Not started.
-
-The largest remaining piece. The proto declares the RPC and the CLI already has
-a complete client for it — `internal/adapters/driving/cli/watch.go` handles the
-initial snapshot, `IN_SYNC`, event rendering in both text and JSON, and Ctrl-C —
-but the server answers `Unimplemented` via the embedded
-`UnimplementedSecretServiceServer`.
+- [ ] In progress. Status as of 2026-09-09 (`47f9671` plus an uncommitted
+      poller draft in `bitwarden.go`). Every layer has a `Watch` signature
+      and the tree builds, but no event has ever reached a client: the
+      poller draft deadlocks before returning, and the gRPC handler still
+      discards the channel. `go test ./...` fails to compile `internal/app`
+      because the fake store's `Watch` has no body.
 
 Purpose: a workload subscribes to a namespace once and is told when a secret
 under it changes, instead of polling `List` or restarting on rotation. Events
 carry metadata only; the client reads a rotated value with `GetSecret`, so
 secret bytes stay on a path that is policy-checked and audited per read.
 
-Design decision: follow the README, not the earlier note here. Watching is an
-optional capability (`ports.Watcher`) probed with a type assertion, and polling
-lives in exactly one decorator that wraps any `SecretStore` lacking it. The
-Bitwarden adapter does not grow a watch loop of its own.
+Design as built: `Watch` was added directly to `ports.SecretStore`
+(`63940c7`), not as an optional `ports.Watcher` with a polling decorator as the
+README describes. That means every backend must implement `Watch`, and a
+polling loop written inside the Bitwarden adapter will have to be duplicated
+or extracted when the AWS backend arrives. Either accept that and fix the
+README's Watch section, or move the loop into `internal/adapters/driven/watch`
+now while it is still empty. Decide before writing the loop.
 
-Checklist, in order:
+Checklist:
 
-- [ ] **Domain.** Add `domain.SecretEvent` (`Type`, `Meta`) and an event type
-      enum with `Added`, `Updated`, `Deleted`, `InSync`. No proto types in
-      `internal/domain`.
-- [ ] **Port.** Add `ports.Watcher` with
-      `Watch(ctx, ns) (<-chan domain.SecretEvent, error)`. Document the
-      contract: one `Added` per existing secret, then exactly one `InSync`,
-      then live events; the channel closes when `ctx` is cancelled or the
-      backend fails, and the store must not block forever on a slow consumer.
-- [ ] **Polling decorator.** New package `internal/adapters/driven/watch`
-      with `WithPollingFallback(store, interval)`. If `store` already
-      implements `ports.Watcher`, return it unchanged. Otherwise poll `List`
-      on a ticker and diff against the previous snapshot keyed by `Key`:
-      new key → `Added`, same key with a different version → `Updated`,
-      missing key → `Deleted` carrying the last observed version. A failed
-      poll is logged and retried on the next tick, not fatal, so a transient
-      backend blip does not tear down every subscriber.
-- [ ] **Wire the interval.** `bitwarden.Config.PollInterval` (`poll_interval`
-      in `vaultlet.yaml`) is parsed and unused. Either move it to top-level
-      server config or pass it from `main.go` into the decorator. Validate a
-      floor (1s or so) so a typo cannot hammer the backend.
-- [ ] **App layer.** Add `Service.Watch(ctx, ns)`. Deny by default with
-      `ActionWatch`, which already exists in `policy.go`, using the same
-      overlap rule as `canList`. Filter every event through the policy so a
-      subscriber to an ancestor namespace only sees keys it may watch. Emit
-      one audit record per subscription (`allow`/`deny`), not per event.
-      Decide whether policy is re-checked per tick so a revoked principal
-      loses the stream, and write the decision down either way.
-- [ ] **gRPC handler.** Implement `WatchSecrets` on `Server`: parse the
-      namespace, call `Service.Watch`, map `ErrPermissionDenied` to
-      `PERMISSION_DENIED`, translate each domain event to
-      `vaultletv1.SecretEvent` and `Send` it, return `nil` on context
-      cancellation. `streamAuth` and stream logging already cover the
-      principal and completion record.
-- [ ] **Startup.** In `cmd/vaultlet/main.go`, wrap the store with the
-      decorator before constructing `app.Service`, so the app layer always
-      sees a watcher.
-- [ ] **Tests.** Decorator against a fake store: snapshot then `InSync`,
-      each of the three diff cases, cancellation closes the channel, failed
-      poll does not close it. Service: denied subscribe never reaches the
-      store, ancestor-namespace filtering, one audit record. Handler: event
-      mapping and `PERMISSION_DENIED`. CLI: `printEvent` text and JSON.
+- [x] **Domain.** `domain.SecretEvent` and the `Added` / `Updated` /
+      `Deleted` / `InSync` constants exist (`e2b841d`, `1dd3f01`). The enum is
+      named `domain.Type`, which reads poorly next to `domain.Key` and
+      `domain.Secret`; `EventType` would be clearer. The field is embedded
+      rather than named, which works but is unusual.
+- [x] **Port.** `Watch(ctx, ns) (<-chan domain.SecretEvent, error)` is on
+      `SecretStore`. The contract is not documented: snapshot then one
+      `InSync` then live events, channel closed on cancellation or backend
+      failure, no indefinite block on a slow consumer. Write it on the
+      interface.
+- [ ] **Fix the test fake.** `fakeStore.Watch` in `service_test.go:70` is a
+      declaration without a body, so the app package does not compile under
+      test. Return a closed channel or a small buffered one.
+- [ ] **Polling loop.** A first draft is in the working tree
+      (`bitwarden.go:274`). The map, ticker and version comparison are the
+      right shape. What must change before it can run:
+      - The initial snapshot sends on the unbuffered channel *before*
+        `Watch` returns it, so the first `c <- ...` blocks forever and no
+        caller ever gets the channel. Move the snapshot inside the
+        goroutine; `Watch` should only create the channel, start the
+        goroutine, and return.
+      - The channel is never closed. `defer close(c)` at the top of the
+        goroutine, so the handler's receive loop ends when `ctx` does.
+      - Every send must `select` on `ctx.Done()` as well, otherwise a
+        client that disconnects mid-send leaks the goroutine.
+      - `ctx.Done()` as a bare statement does nothing; it returns a
+        channel. Delete both occurrences.
+      - `InSync` is emitted on every unchanged key on every tick. The proto
+        allows exactly one, after the snapshot. Drop the `else` branch.
+      - `Deleted` is never emitted. After walking the fresh list, any key
+        still in the map but absent from the list is gone: emit `Deleted`
+        with the stored meta and remove it from the map.
+      - A failed poll returns from the goroutine, tearing the stream down
+        on a transient error. Log it and wait for the next tick instead.
+      - `time.NewTicker` panics on a non-positive interval; the config
+        floor below is what protects it.
+      - Style: `switch exists { case false: ... case true: ... }` is an
+        `if`/`else`; `mMap[existingMeta.Key.String()]` is the same key as
+        `meta.Key.String()`.
+- [x] **Poll interval.** `Config.Validate` requires `poll_interval`
+      (`1dd3f01`) and the draft threads it into `Store.pollingInterval`.
+      Still needs a floor (1s or so) so a typo cannot hammer the backend or
+      panic the ticker.
+- [ ] **App layer.** `Service.Watch` exists but has three problems. It gates
+      on `canList`, so a principal with `watch` but not `list` is denied and
+      vice versa; add a `canWatch` or generalise `canList` over an action.
+      When the store returns an error it audits `error` and then returns
+      `c, nil`, handing the caller a nil channel with no error. And events
+      are not filtered: a subscriber to an ancestor namespace receives every
+      key beneath it, where `List` filters each result by policy. Wrap the
+      store's channel and drop events the principal may not see.
+- [ ] **gRPC handler.** `WatchSecrets` in `handlers.go:149` uses
+      `context.Background()` instead of `server.Context()`, so the principal
+      set by `streamAuth` is lost and every call is denied; it also ignores
+      client cancellation. The raw `ErrPermissionDenied` is returned without
+      mapping to `PERMISSION_DENIED`, and the channel is discarded without a
+      receive loop. Needs: stream context, error mapping as in
+      `ListSecrets`, a `for ev := range c` loop translating to
+      `vaultletv1.SecretEvent` and calling `Send`, and `nil` on cancellation.
+- [ ] **Tests.** Store loop against a fake `List`: snapshot then `InSync`,
+      each diff case, cancellation closes the channel, failed poll does not.
+      Service: denied subscribe never reaches the store, ancestor filtering,
+      one audit record. Handler: event mapping, `PERMISSION_DENIED`,
+      cancellation returns `nil`.
 - [ ] **Verify live** against Bitwarden: subscribe, edit a secret in the
       Bitwarden UI, confirm `UPDATED` arrives within one poll interval, and
       `vaultlet get` returns the new value.
+- [ ] **Docs.** Reconcile the README's Watch section with whichever design
+      is kept, and drop the §1.4 note that watch policy/audit belongs here.
 
 Note that `versionAt` derives the version from `RevisionDate`, so an UPDATED
-event is detectable as a version change on an unchanged key. Also update the
-README's "Watch" section once the decorator exists, and §1.4's note that watch
-policy/audit belongs here.
+event is detectable as a version change on an unchanged key.
 
 ### 1.2 Compare-and-swap
 

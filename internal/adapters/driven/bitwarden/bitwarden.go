@@ -15,10 +15,11 @@ import (
 )
 
 type Store struct {
-	client      sdk.BitwardenClientInterface
-	projectID   string
-	orgID       string
-	allowWrites bool
+	client          sdk.BitwardenClientInterface
+	projectID       string
+	orgID           string
+	allowWrites     bool
+	pollingInterval time.Duration
 }
 
 func New(cfg Config) (*Store, error) {
@@ -36,7 +37,7 @@ func New(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("bitwarden: access token login: %w", err)
 	}
 
-	return &Store{client: client, projectID: cfg.ProjectID, orgID: cfg.OrgID, allowWrites: cfg.AllowWrites}, nil
+	return &Store{client: client, pollingInterval: cfg.PollInterval, projectID: cfg.ProjectID, orgID: cfg.OrgID, allowWrites: cfg.AllowWrites}, nil
 }
 
 // Close releases the FFI handle held by the underlying Rust client.
@@ -276,7 +277,58 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 		return nil, err
 	}
 
+	metas, err := s.List(ctx, ns)
+	if err != nil {
+		ctx.Done()
+		return nil, err
+	}
+
+	mMap := make(map[string]domain.SecretMeta)
 	c := make(chan domain.SecretEvent)
+	for _, meta := range metas {
+		mMap[meta.Key.String()] = meta
+		c <- domain.SecretEvent{Type: domain.Added, Meta: meta}
+	}
+
+	c <- domain.SecretEvent{Type: domain.InSync}
+
+	go func(c chan domain.SecretEvent) {
+		ticker := time.NewTicker(s.pollingInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				metas, err := s.List(ctx, ns)
+				for _, meta := range metas {
+					existingMeta, exists := mMap[meta.Key.String()]
+
+					switch exists {
+					case false:
+						mMap[meta.Key.String()] = meta
+						c <- domain.SecretEvent{Type: domain.Added, Meta: meta}
+
+					case true:
+						if existingMeta.Version != meta.Version {
+							mMap[existingMeta.Key.String()] = meta
+							c <- domain.SecretEvent{Type: domain.Updated, Meta: meta}
+
+						} else {
+							c <- domain.SecretEvent{Type: domain.InSync}
+						}
+					}
+
+				}
+				if err != nil {
+					ctx.Done()
+					return
+				}
+
+			}
+		}
+	}(c)
 
 	return c, nil
 }

@@ -159,5 +159,6 @@ func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.S
 	ctx := context.Background()
 
 	_, err := s.store.Watch(ctx, ns)
+
 	return err
 }
