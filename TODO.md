@@ -15,7 +15,7 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 - [ ] In progress. Status as of 2026-09-10 (`1feabc5` plus the fixed test fake,
       uncommitted). Port, domain event, Bitwarden poller with retry on failed
-      polls and context-aware sends, `Service.Watch` with policy and audit,
+      polls and context-aware sends, `Service.Watch` with policy, audit and per-event filtering,
       poll interval floor, and the streaming gRPC handler with a nil meta on
       `IN_SYNC` and a clean return on client disconnect are all in place. `go test ./...` passes. Not yet verified
       against a live server.
@@ -32,14 +32,11 @@ overlapping namespace. Deliberate, but undocumented; add a comment on
 
 Remaining:
 
-- [ ] **Event filtering.** `Service.Watch` checks the namespace once and
-      forwards every event. A subscriber to an ancestor namespace sees keys
-      it may not `List`. Wrap the channel in a goroutine that drops events
-      whose key falls outside a permitted rule, mirroring `List`.
 - [ ] **Tests.** None for Watch yet. Poller against a fake `List`: snapshot
       then `InSync`, each diff case, cancellation closes the channel, failed
       poll emits nothing and does not close. Service: denied subscribe never
-      reaches the store, ancestor filtering, one audit record. Handler:
+      reaches the store, `filterEvents` drops keys outside a permitted
+      rule and passes `InSync`, one audit record. Handler:
       `mapEvent`, nil meta on `IN_SYNC`, `PERMISSION_DENIED`, cancellation
       returns `nil`.
 - [ ] **Verify live** against Bitwarden: subscribe, edit a secret in the UI,

@@ -111,15 +111,48 @@ func (s *Service) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain
 		return nil, ErrPermissionDenied
 	}
 
-	c, err := s.store.Watch(ctx, ns)
-
-	outcome := "success"
+	src, err := s.store.Watch(ctx, ns)
 	if err != nil {
-		outcome = "error"
+		audit(ctx, principal, ActionWatch, ns.String(), "allow", "error")
+		return nil, err
 	}
 
-	audit(ctx, principal, ActionWatch, ns.String(), "allow", outcome)
-	return c, err
+	audit(ctx, principal, ActionWatch, ns.String(), "allow", "success")
+	return s.filterEvents(ctx, principal, ns, src), nil
+}
+
+// filterEvents applies the same per-key check List does to every event on
+// src, so a subscriber to an ancestor namespace only sees keys it may watch.
+// IN_SYNC carries no key and always passes. The returned channel closes when
+// src closes or ctx ends.
+func (s *Service) filterEvents(ctx context.Context, principal string, ns domain.Namespace, src <-chan domain.SecretEvent) <-chan domain.SecretEvent {
+	out := make(chan domain.SecretEvent)
+
+	go func() {
+		defer close(out)
+		for ev := range src {
+			if ev.Type != domain.InSync && !s.visible(principal, ns, ev.Meta) {
+				continue
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return out
+}
+
+// visible mirrors List's filter: the key must sit under the requested
+// namespace and the principal must hold both list and watch there, matching
+// what canWatch demanded at subscribe time.
+func (s *Service) visible(principal string, ns domain.Namespace, meta domain.SecretMeta) bool {
+	keyNS := meta.Key.Namespace()
+	return ns.Contains(keyNS) &&
+		s.policy.allows(principal, ActionList, keyNS) &&
+		s.policy.allows(principal, ActionWatch, keyNS)
 }
 
 var _ ports.SecretStore = (*Service)(nil)
