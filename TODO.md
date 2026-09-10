@@ -13,9 +13,10 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 ### 1.1 WatchSecrets works end to end, not yet hardened
 
-- [ ] In progress. Status as of 2026-09-09 (`7eb9b20` plus uncommitted
-      changes, including the `emit` helper so poller sends honour `ctx`). Port, domain event, Bitwarden poller, `Service.Watch` with
-      policy and audit, and the streaming gRPC handler are all in place and
+- [ ] In progress. Status as of 2026-09-09 (`1e1245e` plus uncommitted
+      changes). Port, domain event, Bitwarden poller with retry on failed
+      polls and context-aware sends, `Service.Watch` with policy and audit,
+      poll interval floor, and the streaming gRPC handler are all in place.
       `go test ./...` passes. Not yet verified against a live server.
 
 Design as built: `Watch` sits directly on `ports.SecretStore`, not behind an
@@ -30,13 +31,6 @@ overlapping namespace. Deliberate, but undocumented; add a comment on
 
 Remaining:
 
-- [ ] **Poller error handling** (`bitwarden.go:275`). The poll error is
-      checked after the diff. A failed `List` leaves `metas` nil, so every
-      known key is emitted as `Deleted`, removed from the map, and the
-      goroutine exits. One transient Bitwarden error tells every client its
-      secrets are gone. Check `err` right after `List`, log it, `continue`,
-      leave the map untouched. The two bare `ctx.Done()` statements do
-      nothing; delete them.
 - [ ] **`IN_SYNC` wire shape** (`handlers.go`). It is sent with a non-nil
       `Meta` carrying an empty key, empty version and zero `created_at`. The
       proto says meta is unset for `IN_SYNC` and the CLI keys on
@@ -50,8 +44,10 @@ Remaining:
       forwards every event. A subscriber to an ancestor namespace sees keys
       it may not `List`. Wrap the channel in a goroutine that drops events
       whose key falls outside a permitted rule, mirroring `List`.
-- [ ] **Test fake.** `fakeStore.Watch` returns a nil channel on success;
-      ranging over it blocks forever. Return a closed channel.
+- [ ] **Test fake.** `fakeStore.Watch` now returns
+      `make(<-chan domain.SecretEvent)`, an open channel nothing will ever
+      write to or close, so ranging over it still blocks forever. Make a
+      bidirectional channel, `close` it, and return it.
 - [ ] **Tests.** None for Watch yet. Poller against a fake `List`: snapshot
       then `InSync`, each diff case, cancellation closes the channel, failed
       poll emits nothing and does not close. Service: denied subscribe never
@@ -64,7 +60,10 @@ Remaining:
 - [ ] **Docs and tidy.** Reconcile the README's Watch section with the design
       kept; drop the §1.4 note that watch policy/audit belongs here; rename
       `domain.Type` to `EventType`; replace `switch exists { case false /
-      case true }` with `if`/`else`; drop the stray blank line in `PutSecret`.
+      case true }` with `if`/`else`. In the poller, the bare `ctx.Done()`
+      before the snapshot `return` is a no-op, and the trailing
+      `if err != nil` block at the end of the tick is unreachable since the
+      error now hits `continue` first; delete both.
 
 ### 1.2 Compare-and-swap
 

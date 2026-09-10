@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -321,6 +322,10 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 				return
 			case <-ticker.C:
 				metas, err := s.List(ctx, ns)
+				if err != nil {
+					slog.WarnContext(ctx, "bitwarden: watch poll failed", "namespace", ns.String(), "err", err)
+					continue
+				}
 				for _, meta := range metas {
 					existingMeta, exists := mMap[meta.Key.String()]
 
