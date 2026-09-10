@@ -326,6 +326,7 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 					slog.WarnContext(ctx, "bitwarden: watch poll failed", "namespace", ns.String(), "err", err)
 					continue
 				}
+
 				for _, meta := range metas {
 					existingMeta, exists := mMap[meta.Key.String()]
 
@@ -357,12 +358,6 @@ func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.S
 						}
 					}
 				}
-
-				if err != nil {
-					ctx.Done()
-					return
-				}
-
 			}
 		}
 	}(c)

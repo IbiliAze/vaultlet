@@ -13,11 +13,12 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 ### 1.1 WatchSecrets works end to end, not yet hardened
 
-- [ ] In progress. Status as of 2026-09-09 (`1e1245e` plus uncommitted
+- [ ] In progress. Status as of 2026-09-10 (`0bc488b` plus uncommitted
       changes). Port, domain event, Bitwarden poller with retry on failed
       polls and context-aware sends, `Service.Watch` with policy and audit,
-      poll interval floor, and the streaming gRPC handler are all in place.
-      `go test ./...` passes. Not yet verified against a live server.
+      poll interval floor, and the streaming gRPC handler with a nil meta on
+      `IN_SYNC` are all in place. `go test ./...` passes. Not yet verified
+      against a live server.
 
 Design as built: `Watch` sits directly on `ports.SecretStore`, not behind an
 optional `ports.Watcher` with a polling decorator as the README says. Every
@@ -31,11 +32,6 @@ overlapping namespace. Deliberate, but undocumented; add a comment on
 
 Remaining:
 
-- [ ] **`IN_SYNC` wire shape** (`handlers.go`). It is sent with a non-nil
-      `Meta` carrying an empty key, empty version and zero `created_at`. The
-      proto says meta is unset for `IN_SYNC` and the CLI keys on
-      `GetMeta() == nil`, so it currently prints `IN_SYNC` and two blanks.
-      Send `Meta: nil` when `ev.Type == domain.InSync`.
 - [ ] **Client disconnect is reported as `Internal`.** When the client goes
       away, `Send` fails and the handler returns `codes.Internal`, so the
       logging interceptor records an error for every normal disconnect.
@@ -61,9 +57,7 @@ Remaining:
       kept; drop the §1.4 note that watch policy/audit belongs here; rename
       `domain.Type` to `EventType`; replace `switch exists { case false /
       case true }` with `if`/`else`. In the poller, the bare `ctx.Done()`
-      before the snapshot `return` is a no-op, and the trailing
-      `if err != nil` block at the end of the tick is unreachable since the
-      error now hits `continue` first; delete both.
+      before the snapshot `return` is a no-op; delete it.
 
 ### 1.2 Compare-and-swap
 

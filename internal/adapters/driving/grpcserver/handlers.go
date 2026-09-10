@@ -170,14 +170,20 @@ func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.S
 	}
 
 	for ev := range c {
+		var meta *vaultletv1.SecretMeta
+
+		if !isInSync(ev) {
+			meta = &vaultletv1.SecretMeta{
+				Key:       ev.Meta.Key.String(),
+				Version:   ev.Meta.Version.String(),
+				CreatedAt: timestamppb.New(ev.Meta.CreatedAt),
+			}
+		}
+
 		err := server.Send(&vaultletv1.WatchSecretsResponse{
 			Event: &vaultletv1.SecretEvent{
 				Type: mapEvent(ev.Type),
-				Meta: &vaultletv1.SecretMeta{
-					Key:       ev.Meta.Key.String(),
-					Version:   ev.Meta.Version.String(),
-					CreatedAt: timestamppb.New(ev.Meta.CreatedAt),
-				},
+				Meta: meta,
 			},
 		})
 
@@ -187,6 +193,10 @@ func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.S
 	}
 
 	return nil
+}
+
+func isInSync(e domain.SecretEvent) bool {
+	return e.Type == domain.InSync
 }
 
 func mapEvent(eventType domain.Type) vaultletv1.SecretEventType {
