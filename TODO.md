@@ -17,7 +17,7 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
       uncommitted). Port, domain event, Bitwarden poller with retry on failed
       polls and context-aware sends, `Service.Watch` with policy and audit,
       poll interval floor, and the streaming gRPC handler with a nil meta on
-      `IN_SYNC` are all in place. `go test ./...` passes. Not yet verified
+      `IN_SYNC` and a clean return on client disconnect are all in place. `go test ./...` passes. Not yet verified
       against a live server.
 
 Design as built: `Watch` sits directly on `ports.SecretStore`, not behind an
@@ -32,10 +32,6 @@ overlapping namespace. Deliberate, but undocumented; add a comment on
 
 Remaining:
 
-- [ ] **Client disconnect is reported as `Internal`.** When the client goes
-      away, `Send` fails and the handler returns `codes.Internal`, so the
-      logging interceptor records an error for every normal disconnect.
-      Return `nil` when `ctx.Err() != nil`, the error otherwise.
 - [ ] **Event filtering.** `Service.Watch` checks the namespace once and
       forwards every event. A subscriber to an ancestor namespace sees keys
       it may not `List`. Wrap the channel in a goroutine that drops events

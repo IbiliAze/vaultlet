@@ -188,7 +188,15 @@ func (s *Server) WatchSecrets(req *vaultletv1.WatchSecretsRequest, server grpc.S
 		})
 
 		if err != nil {
-			return status.Error(codes.Internal, err.Error())
+			// A client that hangs up mid-stream is the normal way a watch
+			// ends, not a server fault. Report it as a clean return so the
+			// logging interceptor records OK rather than an error.
+			if ctx.Err() != nil {
+				return nil
+			}
+
+			slog.ErrorContext(ctx, "watch secrets: send", "err", err)
+			return status.Error(codes.Internal, "internal error")
 		}
 	}
 
