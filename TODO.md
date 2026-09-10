@@ -13,8 +13,8 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 ### 1.1 WatchSecrets works end to end, not yet hardened
 
-- [ ] In progress. Status as of 2026-09-10 (`0bc488b` plus uncommitted
-      changes). Port, domain event, Bitwarden poller with retry on failed
+- [ ] In progress. Status as of 2026-09-10 (`1feabc5` plus the fixed test fake,
+      uncommitted). Port, domain event, Bitwarden poller with retry on failed
       polls and context-aware sends, `Service.Watch` with policy and audit,
       poll interval floor, and the streaming gRPC handler with a nil meta on
       `IN_SYNC` are all in place. `go test ./...` passes. Not yet verified
@@ -40,10 +40,6 @@ Remaining:
       forwards every event. A subscriber to an ancestor namespace sees keys
       it may not `List`. Wrap the channel in a goroutine that drops events
       whose key falls outside a permitted rule, mirroring `List`.
-- [ ] **Test fake.** `fakeStore.Watch` now returns
-      `make(<-chan domain.SecretEvent)`, an open channel nothing will ever
-      write to or close, so ranging over it still blocks forever. Make a
-      bidirectional channel, `close` it, and return it.
 - [ ] **Tests.** None for Watch yet. Poller against a fake `List`: snapshot
       then `InSync`, each diff case, cancellation closes the channel, failed
       poll emits nothing and does not close. Service: denied subscribe never

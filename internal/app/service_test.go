@@ -73,7 +73,9 @@ func (f *fakeStore) Watch(ctx context.Context, ns domain.Namespace) (<-chan doma
 	if f.err != nil {
 		return nil, f.err
 	}
-	return make(<-chan domain.SecretEvent), nil
+	c := make(chan domain.SecretEvent)
+	close(c)
+	return c, nil
 }
 
 func TestServiceList(t *testing.T) {
