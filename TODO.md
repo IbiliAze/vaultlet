@@ -13,11 +13,12 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
 
 ### 1.1 WatchSecrets works end to end, not yet hardened
 
-- [ ] In progress. Status as of 2026-09-10 (`1feabc5` plus the fixed test fake,
-      uncommitted). Port, domain event, Bitwarden poller with retry on failed
-      polls and context-aware sends, `Service.Watch` with policy, audit and per-event filtering,
-      poll interval floor, and the streaming gRPC handler with a nil meta on
-      `IN_SYNC` and a clean return on client disconnect are all in place. `go test ./...` passes. Not yet verified
+- [ ] In progress. Status as of 2026-09-12 (`9e4800e`). Port, domain event,
+      Bitwarden poller with retry on failed polls and context-aware sends,
+      `Service.Watch` with policy, audit and per-event filtering
+      (`filterEvents`, `9e4800e`), poll interval floor, and the streaming gRPC
+      handler with a nil meta on `IN_SYNC` and a clean return on client
+      disconnect are all in place. `go test ./...` passes. Not yet verified
       against a live server.
 
 Design as built: `Watch` sits directly on `ports.SecretStore`, not behind an
@@ -32,13 +33,18 @@ overlapping namespace. Deliberate, but undocumented; add a comment on
 
 Remaining:
 
-- [ ] **Tests.** None for Watch yet. Poller against a fake `List`: snapshot
+- [x] **Service tests** (uncommitted, 2026-09-12). `TestServiceWatch` in
+      `service_test.go` covers: no principal, no rule, and namespace outside
+      the rule are denied without touching the store; a store error passes
+      through; and for narrower- and broader-than-rule subscriptions
+      `filterEvents` keeps only permitted keys, passes `InSync` exactly once,
+      and closes when the source closes. `fakeStore.Watch` now replays its
+      seed as `Added` events then `InSync`. The audit record is still not
+      asserted (no audit test seam exists yet; see §1.4).
+- [ ] **Poller and handler tests.** Poller against a fake `List`: snapshot
       then `InSync`, each diff case, cancellation closes the channel, failed
-      poll emits nothing and does not close. Service: denied subscribe never
-      reaches the store, `filterEvents` drops keys outside a permitted
-      rule and passes `InSync`, one audit record. Handler:
-      `mapEvent`, nil meta on `IN_SYNC`, `PERMISSION_DENIED`, cancellation
-      returns `nil`.
+      poll emits nothing and does not close. Handler: `mapEvent`, nil meta on
+      `IN_SYNC`, `PERMISSION_DENIED`, cancellation returns `nil`.
 - [ ] **Verify live** against Bitwarden: subscribe, edit a secret in the UI,
       confirm `UPDATED` within one poll interval, `vaultlet get` returns the
       new value, Ctrl-C ends the stream without a server-side error log.
@@ -111,16 +117,21 @@ Nothing remains; §1.3 is complete.
       before authentication so rejected credentials are logged too. Records
       include method, duration in milliseconds and returned gRPC status;
       streaming duration covers the handler's lifetime. This absorbs §2.5.
-- [ ] Behavioral verification remains: allowed and denied operations, denied
-      calls skipping the backend, List filtering for ancestor/empty namespaces
-      and segment boundaries, backend failures, one audit record per service
-      call, and RPC completion logging for success/authentication/policy errors.
+- [x] Service-level policy tests landed (`6d1383a`..`b2e6d59`, plus
+      `policy_test.go` / `principal_test.go`): allowed and denied Get, Put,
+      List and Delete, denied calls never reaching the fake store, List
+      filtering for narrower- and broader-than-rule requests, and backend
+      errors passing through.
+- [ ] Behavioral verification still missing: List filtering for the empty
+      namespace and segment boundaries, one audit record per service call
+      (nothing asserts on audit output), and RPC completion logging in the
+      interceptors for success/authentication/policy errors.
 
-Implementation is complete for the current Get/Put/List/Delete surface.
-`go test ./...` passes, but there are no tests yet; this confirms compilation,
-not runtime authorization or audit behavior. Authentication's earlier live
-verification is recorded above. Watch policy/audit belongs with §1.1 when that
-RPC is implemented.
+Implementation is complete for the current Get/Put/List/Delete surface and
+the app-layer policy checks are now covered by unit tests. Audit and
+interceptor behavior are still confirmed by compilation only. Authentication's
+earlier live verification is recorded above. Watch policy/audit belongs with
+§1.1.
 
 ### 1.5 Read-only backends (`ports.ErrReadOnly`)
 
@@ -200,13 +211,14 @@ Implementation complete; behavioral verification is tracked in §1.4.
 
 ### 3.1 No tests
 
-- [ ] Not started. Still no `_test.go` anywhere in the repo, though `make test`
-      exists.
+- [ ] Started. `internal/app` has `policy_test.go`, `principal_test.go` and
+      `service_test.go` (Get/Put/List/Delete). `domain`, `grpcserver`, `cli`
+      and the Bitwarden adapter still have no tests.
 
 - `domain`: `ParseKey`, `ParseNamespace`, `Namespace.Contains` are pure
   functions against a documented grammar. Cheapest, highest-value tests here.
-- `app`: policy enforcement, filtered listings and audit records, including
-  denied calls never reaching the backend (see §1.4).
+- `app`: done for policy enforcement, filtered listings and `Watch` filtering;
+  audit records are still uncovered (see §1.4).
 - `grpcserver`: the handlers are testable against a fake `ports.SecretStore` —
   particularly the error mapping (`ErrNotFound` → `NOT_FOUND`, `ErrEmptyValue` →
   `INVALID_ARGUMENT`, empty namespace → list everything, non-empty page token →

@@ -68,14 +68,150 @@ func (f *fakeStore) Delete(_ context.Context, key domain.Key) error {
 	return nil
 }
 
+// Watch replays every seeded secret under ns as an Added event, then
+// sends InSync and closes, mirroring the poller's initial snapshot. That is
+// enough for the service test to see filterEvents drop and pass events.
 func (f *fakeStore) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.SecretEvent, error) {
 	f.watchCalls++
 	if f.err != nil {
 		return nil, f.err
 	}
+	metas, _ := f.List(ctx, ns)
+	f.listCalls-- // an internal helper call, not a service call
+
 	c := make(chan domain.SecretEvent)
-	close(c)
+	go func() {
+		defer close(c)
+		for _, m := range metas {
+			select {
+			case c <- domain.SecretEvent{Type: domain.Added, Meta: m}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		select {
+		case c <- domain.SecretEvent{Type: domain.InSync}:
+		case <-ctx.Done():
+		}
+	}()
 	return c, nil
+}
+
+func TestServiceWatch(t *testing.T) {
+	// Same seed as TestServiceList: the fake's Watch replays these as
+	// Added events, so the filter has something to keep and something
+	// to drop.
+	seed := seedSecrets(t,
+		"payments/prod/A",
+		"payments/dev/B",
+		"billing/C",
+	)
+
+	alice := WithPrincipal(context.Background(), "alice")
+
+	tests := []struct {
+		name       string
+		ctx        context.Context
+		rule       string // namespace alice may list+watch; "" means no rule
+		watch      string // namespace subscribed to
+		storeErr   error
+		wantErr    error
+		wantCalled bool
+		wantKeys   []string
+	}{
+		{
+			name: "no principal", ctx: context.Background(),
+			rule: "payments", watch: "payments",
+			wantErr: ErrPermissionDenied,
+		},
+		{
+			name: "no rule for principal", ctx: alice,
+			rule: "", watch: "payments",
+			wantErr: ErrPermissionDenied,
+		},
+		{
+			name: "namespace outside rule", ctx: alice,
+			rule: "payments", watch: "billing",
+			wantErr: ErrPermissionDenied,
+		},
+		{
+			name: "rule covers request", ctx: alice,
+			rule: "payments", watch: "payments",
+			wantCalled: true, wantKeys: []string{"payments/dev/B", "payments/prod/A"},
+		},
+		{
+			name: "request narrower than rule", ctx: alice,
+			rule: "payments", watch: "payments/prod",
+			wantCalled: true, wantKeys: []string{"payments/prod/A"},
+		},
+		{
+			// canWatch lets a broad subscription through when a rule sits
+			// inside it, but filterEvents must still hide the rest.
+			name: "request broader than rule", ctx: alice,
+			rule: "payments/prod", watch: "payments",
+			wantCalled: true, wantKeys: []string{"payments/prod/A"},
+		},
+		{
+			name: "store error passes through", ctx: alice,
+			rule: "payments", watch: "payments",
+			storeErr: ports.ErrReadOnly, wantErr: ports.ErrReadOnly,
+			wantCalled: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var specs []RuleSpec
+			if tc.rule != "" {
+				specs = append(specs, RuleSpec{Principal: "alice", Namespace: tc.rule, Actions: []string{"list", "watch"}})
+			}
+			policy, err := NewPolicy(specs)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			store := &fakeStore{secrets: maps.Clone(seed), err: tc.storeErr}
+			svc := NewService(store, policy)
+
+			ctx, cancel := context.WithCancel(tc.ctx)
+			defer cancel()
+
+			events, err := svc.Watch(ctx, domain.MustNamespace(tc.watch))
+
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if called := store.watchCalls > 0; called != tc.wantCalled {
+				t.Errorf("store called = %v, want %v", called, tc.wantCalled)
+			}
+			if err != nil {
+				if events != nil {
+					t.Errorf("got a channel alongside an error")
+				}
+				return
+			}
+
+			// Drain until the fake closes; the filtered channel must close
+			// with it. Keys from Added events are what the subscriber sees,
+			// and the trailing InSync must pass the filter untouched.
+			var gotKeys []string
+			inSync := 0
+			for ev := range events {
+				if ev.Type == domain.InSync {
+					inSync++
+					continue
+				}
+				gotKeys = append(gotKeys, ev.Meta.Key.String())
+			}
+			slices.Sort(gotKeys)
+			if !slices.Equal(gotKeys, tc.wantKeys) {
+				t.Errorf("keys = %v, want %v", gotKeys, tc.wantKeys)
+			}
+			if inSync != 1 {
+				t.Errorf("InSync events = %d, want 1", inSync)
+			}
+		})
+	}
 }
 
 func TestServiceList(t *testing.T) {
