@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/IbiliAze/vaultlet/internal/adapters/driven/watch"
 	"github.com/IbiliAze/vaultlet/internal/domain"
 	"github.com/IbiliAze/vaultlet/internal/ports"
 
@@ -273,96 +273,11 @@ func (s *Store) Delete(ctx context.Context, key domain.Key) error {
 	return nil
 }
 
+// Watch polls List on the configured interval and diffs snapshots; Bitwarden
+// has no change notification of its own. See the watch package for the
+// event rules.
 func (s *Store) Watch(ctx context.Context, ns domain.Namespace) (<-chan domain.SecretEvent, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	mMap := make(map[string]domain.SecretMeta)
-	c := make(chan domain.SecretEvent)
-
-	// emit delivers ev unless the subscriber is gone. Without the select a
-	// goroutine parked on an unbuffered send would never observe ctx and
-	// would leak once the gRPC handler returns. It reports false when the
-	// caller should stop.
-	emit := func(ev domain.SecretEvent) bool {
-		select {
-		case c <- ev:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-
-	go func(c chan domain.SecretEvent) {
-		defer close(c)
-
-		metas, err := s.List(ctx, ns)
-		if err != nil {
-			ctx.Done()
-			return
-		}
-		for _, meta := range metas {
-			mMap[meta.Key.String()] = meta
-			if !emit(domain.SecretEvent{Type: domain.Added, Meta: meta}) {
-				return
-			}
-		}
-
-		if !emit(domain.SecretEvent{Type: domain.InSync}) {
-			return
-		}
-
-		ticker := time.NewTicker(s.pollingInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				metas, err := s.List(ctx, ns)
-				if err != nil {
-					slog.WarnContext(ctx, "bitwarden: watch poll failed", "namespace", ns.String(), "err", err)
-					continue
-				}
-
-				for _, meta := range metas {
-					existingMeta, exists := mMap[meta.Key.String()]
-
-					switch exists {
-					case false:
-						mMap[meta.Key.String()] = meta
-						if !emit(domain.SecretEvent{Type: domain.Added, Meta: meta}) {
-							return
-						}
-
-					case true:
-						if existingMeta.Version != meta.Version {
-							mMap[meta.Key.String()] = meta
-							if !emit(domain.SecretEvent{Type: domain.Updated, Meta: meta}) {
-								return
-							}
-						}
-					}
-
-				}
-
-				for k, meta := range mMap {
-					if !slices.ContainsFunc(metas, func(m domain.SecretMeta) bool {
-						return m.Key.String() == meta.Key.String()
-					}) {
-						delete(mMap, k)
-						if !emit(domain.SecretEvent{Type: domain.Deleted, Meta: meta}) {
-							return
-						}
-					}
-				}
-			}
-		}
-	}(c)
-
-	return c, nil
+	return watch.Poll(ctx, ns, s.pollingInterval, s.List)
 }
 
 func optional(s string) *string {

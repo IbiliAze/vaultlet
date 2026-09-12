@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"strings"
 
+	"github.com/IbiliAze/vaultlet/internal/adapters/driven/azure"
 	"github.com/IbiliAze/vaultlet/internal/adapters/driven/bitwarden"
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/dotenv"
@@ -37,6 +38,7 @@ type Config struct {
 	Listen    string           `koanf:"listen"`
 	Backend   string           `koanf:"backend"`
 	Bitwarden bitwarden.Config `koanf:"bitwarden"`
+	Azure     azure.Config     `koanf:"azure"`
 	TLS       TLSConfig        `koanf:"tls"`
 	Auth      AuthConfig       `koanf:"auth"`
 }

@@ -21,11 +21,14 @@ Ordered roughly by impact. The suggested sequence is at the bottom.
       disconnect are all in place. `go test ./...` passes. Not yet verified
       against a live server.
 
-Design as built: `Watch` sits directly on `ports.SecretStore`, not behind an
-optional `ports.Watcher` with a polling decorator as the README says. Every
-backend must therefore implement `Watch`, and the poll loop lives in the
-Bitwarden adapter. Accept that and fix the README, or extract the loop into
-`internal/adapters/driven/watch` before the AWS backend needs it.
+Design as built: `Watch` sits directly on `ports.SecretStore`; every backend
+implements it. The poll loop was extracted into
+`internal/adapters/driven/watch` (`watch.Poll`, uncommitted 2026-09-12) when
+the Azure backend landed, so Bitwarden and Azure share one snapshot/diff
+implementation and AWS can reuse it. The README's Watch section now
+describes this. One behavioural change came with the extraction: the initial
+snapshot runs synchronously, so a backend that is down at subscribe time
+returns an error from `Watch` instead of a stream that closes empty.
 
 Policy as built: `canWatch` requires both `list` and `watch` on an
 overlapping namespace. Deliberate, but undocumented; add a comment on
@@ -41,18 +44,20 @@ Remaining:
       and closes when the source closes. `fakeStore.Watch` now replays its
       seed as `Added` events then `InSync`. The audit record is still not
       asserted (no audit test seam exists yet; see §1.4).
-- [ ] **Poller and handler tests.** Poller against a fake `List`: snapshot
-      then `InSync`, each diff case, cancellation closes the channel, failed
-      poll emits nothing and does not close. Handler: `mapEvent`, nil meta on
-      `IN_SYNC`, `PERMISSION_DENIED`, cancellation returns `nil`.
+- [x] **Poller tests** (uncommitted, 2026-09-12). `watch/poll_test.go`
+      covers snapshot then `InSync`, Added/Updated/Deleted diffs, a silent
+      unchanged poll, failed polls emitting nothing and keeping the stream
+      open, recovery after a failed poll, initial-snapshot error, and
+      cancellation closing the channel both when idle and when blocked on a
+      send.
+- [ ] **Handler tests.** `mapEvent`, nil meta on `IN_SYNC`,
+      `PERMISSION_DENIED`, cancellation returns `nil`.
 - [ ] **Verify live** against Bitwarden: subscribe, edit a secret in the UI,
       confirm `UPDATED` within one poll interval, `vaultlet get` returns the
       new value, Ctrl-C ends the stream without a server-side error log.
-- [ ] **Docs and tidy.** Reconcile the README's Watch section with the design
-      kept; drop the §1.4 note that watch policy/audit belongs here; rename
-      `domain.Type` to `EventType`; replace `switch exists { case false /
-      case true }` with `if`/`else`. In the poller, the bare `ctx.Done()`
-      before the snapshot `return` is a no-op; delete it.
+- [x] README's Watch section reconciled; the `switch exists` and the no-op
+      `ctx.Done()` went away with the extraction (uncommitted, 2026-09-12).
+- [ ] **Tidy.** Rename `domain.Type` to `EventType`.
 
 ### 1.2 Compare-and-swap
 
@@ -239,10 +244,23 @@ on `next_page_token`, so it can wait — but it will matter on a large org.
 
 ### 3.3 Second backend
 
-- [ ] Not started.
-
-`internal/adapters/driven/aws/` is an empty directory. A second backend is the
-whole point of the ports design and the best proof the abstraction holds.
+- [x] Azure Key Vault (`internal/adapters/driven/azure`, uncommitted
+      2026-09-12). Full `ports.SecretStore` including `Watch` via
+      `watch.Poll`. Keys are escaped into Key Vault's `[0-9a-zA-Z-]`,
+      case-insensitive names (`name.go`) with the canonical key in a
+      `vaultlet-key` tag; versions are the `Updated` timestamp; 404 maps to
+      `ErrNotFound`; `allow_writes` gates Put/Delete; `purge_on_delete`
+      follows the soft delete with a bounded purge retry. Wired into
+      `config.Config.Azure`, `newStore` (`backend: azure`),
+      `vaultlet.example.yml` and the README. Unit-tested against an
+      in-memory fake of the SDK client (paging, encoding round-trip,
+      soft-delete conflict, watch diffs). Not yet verified against a live
+      vault.
+- [ ] AWS Secrets Manager. `internal/adapters/driven/aws/` is still empty.
+      Reuse `watch.Poll` for `Watch` as the other two backends do.
+- [ ] Verify Azure live: put, get, list across a page boundary (>25
+      secrets), delete with and without `purge_on_delete`, and a watch that
+      sees an edit made in the portal.
 
 ---
 
@@ -272,3 +290,4 @@ whole point of the ports design and the best proof the abstraction holds.
 1. Domain, app and handler/interceptor tests, including the authorization and
    audit verification in §1.4.
 2. Harden `WatchSecrets` per §1.1 and verify it live.
+3. Verify the Azure backend live (§3.3), then the AWS backend.

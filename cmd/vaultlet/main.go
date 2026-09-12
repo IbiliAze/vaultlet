@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/IbiliAze/vaultlet/internal/adapters/driven/azure"
 	"github.com/IbiliAze/vaultlet/internal/adapters/driven/bitwarden"
 	"github.com/IbiliAze/vaultlet/internal/adapters/driving/grpcserver"
 	service "github.com/IbiliAze/vaultlet/internal/app"
@@ -77,6 +78,8 @@ func newStore(cfg config.Config) (ports.SecretStore, error) {
 	switch cfg.Backend {
 	case "bitwarden":
 		return bitwarden.New(cfg.Bitwarden)
+	case "azure":
+		return azure.New(cfg.Azure)
 	default:
 		return nil, fmt.Errorf("unknown backend %q", cfg.Backend)
 	}

@@ -156,10 +156,18 @@ heavily tested function in the codebase.
 `Watch` is a server-streaming RPC: the client subscribes to a namespace once and
 the server pushes `SecretEvent` messages as things change.
 
-Backends that can notify natively (AWS via EventBridge) implement the optional
-`ports.Watcher` interface. Backends that cannot (Bitwarden) are wrapped by
-`watch.WithPollingFallback`, which polls, diffs versions, and emits the same
-events. The app layer always sees a watcher; polling exists in exactly one place.
+`Watch` is a method on `ports.SecretStore`, so every backend implements it.
+None of the current backends can notify natively, so each one's `Watch` calls
+`watch.Poll` (`internal/adapters/driven/watch`), which takes a snapshot,
+replays it as `Added` events, sends `InSync`, then polls `List` on the
+configured interval and emits `Added`, `Updated` and `Deleted` as versions
+change. A failed poll is logged and skipped; the stream stays open. A backend
+that gains native notification (AWS via EventBridge) can implement `Watch`
+directly without touching the poller.
+
+Subscribing requires both `list` and `watch` on a namespace overlapping the
+request, and each event is filtered against the subscriber's `list` and
+`watch` rules before it is sent.
 
 ---
 
@@ -222,11 +230,32 @@ startup rather than on the first request.
 
 ## Backends
 
-| Backend     | Reads | Writes | Native watch  | Notes                                                          |
-| ----------- | ----- | ------ | ------------- | -------------------------------------------------------------- |
-| `file`      | ✅    | ✅     | ✅ (fsnotify) | AES-GCM at rest. Dev and tests.                                |
-| `bitwarden` | ✅    | ❌     | ❌ (polled)   | Bitwarden Secrets Manager. Manage secrets in the Bitwarden UI. |
-| `aws`       | ✅    | ❌     | planned       | AWS Secrets Manager.                                           |
+| Backend     | Reads | Writes           | Native watch | Notes                                                                                         |
+| ----------- | ----- | ---------------- | ------------ | --------------------------------------------------------------------------------------------- |
+| `bitwarden` | ✅    | `allow_writes`   | ❌ (polled)  | Bitwarden Secrets Manager, scoped to one project.                                             |
+| `azure`     | ✅    | `allow_writes`   | ❌ (polled)  | Azure Key Vault secrets. Keys are encoded into vault names; see below.                        |
+| `aws`       | ✅    | ❌               | planned      | AWS Secrets Manager. Not started.                                                             |
+
+### Azure Key Vault
+
+Key Vault names allow only `[0-9a-zA-Z-]` and compare case-insensitively, so
+a key such as `payments/prod/DB_URL` is stored under an escaped name
+(`payments-1prod-1-d-b-2-u-r-l`; `-` escapes `-`, `/`, `_`, `.` and uppercase).
+The canonical key is also written to the `vaultlet-key` tag so the portal
+stays readable. Secrets created by hand that do not follow the encoding are
+ignored by `List` and `Watch`. Namespaces are filtered client-side from a
+full listing of the vault.
+
+Delete is a Key Vault soft delete: the name is unusable until the secret is
+purged or the retention period ends. `purge_on_delete: true` purges right
+after deleting, which needs the purge permission and a vault without purge
+protection. Versions are the secret's `Updated` timestamp, not Key Vault's
+own version identifier, because the listing endpoint does not return it.
+
+Authentication uses the SDK's default credential chain unless `tenant_id`,
+`client_id` and `client_secret` are all set, in which case that service
+principal is used. The identity needs the Key Vault Secrets User role for
+reads and Key Vault Secrets Officer for writes.
 
 One server instance serves **one** backend. To serve several, either run one
 instance per backend, or use the namespace-routing store (see Roadmap).
@@ -307,8 +336,9 @@ make run          # server with examples/dev.yaml
 3. `var _ ports.SecretStore = (*Store)(nil)` for a compile-time check.
 4. Add a case to `newStore` in `cmd/vaultlet/main.go`.
 5. Wire it into `test/conformance` and make it pass.
-6. If it can notify natively, implement `ports.Watcher`; otherwise the polling
-   decorator handles it.
+6. Implement `Watch`. Without native notification, return
+   `watch.Poll(ctx, ns, interval, s.List)` and enforce a poll-interval floor
+   in `Config.Validate`, as the Bitwarden and Azure adapters do.
 
 Map vendor errors to `ports.ErrNotFound` / `ErrReadOnly` / `ErrUnavailable` in
 the adapter. Vendor error types must not escape the package.

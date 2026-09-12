@@ -4,12 +4,28 @@ backend: bitwarden
 tls:
   cert_file: cert/cert.pem
   key_file: cert/key.pem
+# backend: bitwarden
 bitwarden:
   api_url: ''
   identity_url: ''
   access_token: ''
   poll_interval: '30s'
   allow_writes: true
+# backend: azure (Key Vault secrets)
+azure:
+  vault_url: 'https://<name>.vault.azure.net'
+  # Leave the three below empty to use the SDK's default credential chain
+  # (AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET, workload or
+  # managed identity, az CLI). Set all three for an explicit service principal.
+  tenant_id: ''
+  client_id: ''
+  client_secret: ''
+  poll_interval: '30s'
+  allow_writes: false
+  # Key Vault soft-deletes; a deleted name cannot be reused until purged.
+  # true purges right after delete (needs the purge permission, and fails
+  # on vaults with purge protection).
+  purge_on_delete: false
 auth:
   users:
     # bcrypt hash, e.g. `htpasswd -bnBC 10 "" <password> | tr -d ':\n'`.
