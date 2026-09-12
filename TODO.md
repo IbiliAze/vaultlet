@@ -256,11 +256,32 @@ on `next_page_token`, so it can wait — but it will matter on a large org.
       in-memory fake of the SDK client (paging, encoding round-trip,
       soft-delete conflict, watch diffs). Not yet verified against a live
       vault.
+- [x] Google Cloud Secret Manager (`internal/adapters/driven/gcp`,
+      uncommitted 2026-09-12). One secret per key, one version per Put,
+      reads access `latest`; versions are Secret Manager's numeric IDs, so
+      no timestamp derivation. IDs escape only `/`, `.` and `-`
+      (`payments-1prod-1DB_URL`) with the canonical key in a `vaultlet-key`
+      annotation. `List` skips foreign IDs, versionless secrets and disabled
+      or destroyed latest versions, and costs `1 + N` calls per poll because
+      the listing carries no version. Delete is permanent. Wired into
+      `config.Config.GCP`, `newStore` (`backend: gcp`), the example config
+      and the README. Unit-tested against an in-memory fake with gRPC
+      status codes; the real constructor was smoke-tested offline with a
+      throwaway service-account key. Not verified against a live project.
 - [ ] AWS Secrets Manager. `internal/adapters/driven/aws/` is still empty.
-      Reuse `watch.Poll` for `Watch` as the other two backends do.
+      Reuse `watch.Poll` for `Watch` as the other backends do.
 - [ ] Verify Azure live: put, get, list across a page boundary (>25
       secrets), delete with and without `purge_on_delete`, and a watch that
       sees an edit made in the portal.
+- [ ] Verify GCP live: put creates the secret with automatic replication
+      and the annotation, a second put adds version 2, list on a project
+      with foreign secrets, delete, and a watch that sees a version added
+      in the console. Check the `1 + N` poll cost on a realistic project
+      and whether a `name:` filter on ListSecrets is worth adding.
+- [ ] Decide what `SecretMeta.CreatedAt` means. All three adapters return
+      the secret's creation time, but the README says to sort by
+      `CreatedAt` for chronology, which only holds if it were the
+      revision's time. Pick one and fix the other.
 
 ---
 
@@ -290,4 +311,4 @@ on `next_page_token`, so it can wait — but it will matter on a large org.
 1. Domain, app and handler/interceptor tests, including the authorization and
    audit verification in §1.4.
 2. Harden `WatchSecrets` per §1.1 and verify it live.
-3. Verify the Azure backend live (§3.3), then the AWS backend.
+3. Verify the Azure and GCP backends live (§3.3), then build AWS.

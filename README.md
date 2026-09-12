@@ -234,6 +234,7 @@ startup rather than on the first request.
 | ----------- | ----- | ---------------- | ------------ | --------------------------------------------------------------------------------------------- |
 | `bitwarden` | ✅    | `allow_writes`   | ❌ (polled)  | Bitwarden Secrets Manager, scoped to one project.                                             |
 | `azure`     | ✅    | `allow_writes`   | ❌ (polled)  | Azure Key Vault secrets. Keys are encoded into vault names; see below.                        |
+| `gcp`       | ✅    | `allow_writes`   | ❌ (polled)  | Google Cloud Secret Manager. One secret per key, one version per Put; see below.              |
 | `aws`       | ✅    | ❌               | planned      | AWS Secrets Manager. Not started.                                                             |
 
 ### Azure Key Vault
@@ -256,6 +257,27 @@ Authentication uses the SDK's default credential chain unless `tenant_id`,
 `client_id` and `client_secret` are all set, in which case that service
 principal is used. The identity needs the Key Vault Secrets User role for
 reads and Key Vault Secrets Officer for writes.
+
+### Google Cloud Secret Manager
+
+Each key is one secret in the configured project; every `Put` adds a version
+and reads access `latest`. Versions are Secret Manager's own numeric IDs.
+Secret IDs allow `[A-Za-z0-9_-]` and are case-sensitive, so only `/`, `.`
+and `-` are escaped: `payments/prod/DB_URL` is stored as
+`payments-1prod-1DB_URL`, with the canonical key in the `vaultlet-key`
+annotation. Secrets that do not follow the encoding, have no versions, or
+whose latest version is disabled or destroyed are ignored by `List` and
+`Watch`.
+
+`List` walks the whole project and needs one extra call per matching secret
+to learn its current version, so a watch on a large project costs
+`1 + N` requests per poll. `Delete` is permanent and removes every version.
+
+Credentials come from Application Default Credentials unless
+`credentials_file` names a service-account key. The identity needs
+`roles/secretmanager.secretAccessor` plus `secretmanager.secrets.list` and
+`secretmanager.versions.get` (Secret Manager Viewer) for reads, and
+Secret Manager Admin for writes.
 
 One server instance serves **one** backend. To serve several, either run one
 instance per backend, or use the namespace-routing store (see Roadmap).

@@ -7,6 +7,7 @@ import (
 
 	"github.com/IbiliAze/vaultlet/internal/adapters/driven/azure"
 	"github.com/IbiliAze/vaultlet/internal/adapters/driven/bitwarden"
+	"github.com/IbiliAze/vaultlet/internal/adapters/driven/gcp"
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/dotenv"
 	"github.com/knadh/koanf/parsers/yaml"
@@ -39,6 +40,7 @@ type Config struct {
 	Backend   string           `koanf:"backend"`
 	Bitwarden bitwarden.Config `koanf:"bitwarden"`
 	Azure     azure.Config     `koanf:"azure"`
+	GCP       gcp.Config       `koanf:"gcp"`
 	TLS       TLSConfig        `koanf:"tls"`
 	Auth      AuthConfig       `koanf:"auth"`
 }

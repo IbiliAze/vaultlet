@@ -10,6 +10,7 @@ import (
 
 	"github.com/IbiliAze/vaultlet/internal/adapters/driven/azure"
 	"github.com/IbiliAze/vaultlet/internal/adapters/driven/bitwarden"
+	"github.com/IbiliAze/vaultlet/internal/adapters/driven/gcp"
 	"github.com/IbiliAze/vaultlet/internal/adapters/driving/grpcserver"
 	service "github.com/IbiliAze/vaultlet/internal/app"
 	"github.com/IbiliAze/vaultlet/internal/config"
@@ -80,6 +81,8 @@ func newStore(cfg config.Config) (ports.SecretStore, error) {
 		return bitwarden.New(cfg.Bitwarden)
 	case "azure":
 		return azure.New(cfg.Azure)
+	case "gcp":
+		return gcp.New(context.Background(), cfg.GCP)
 	default:
 		return nil, fmt.Errorf("unknown backend %q", cfg.Backend)
 	}

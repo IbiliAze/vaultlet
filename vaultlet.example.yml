@@ -26,6 +26,15 @@ azure:
   # true purges right after delete (needs the purge permission, and fails
   # on vaults with purge protection).
   purge_on_delete: false
+# backend: gcp (Secret Manager)
+gcp:
+  project_id: ''
+  # Empty uses Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS,
+  # workload identity, attached service account, gcloud auth). Set to a
+  # service-account key file to override.
+  credentials_file: ''
+  poll_interval: '30s'
+  allow_writes: false
 auth:
   users:
     # bcrypt hash, e.g. `htpasswd -bnBC 10 "" <password> | tr -d ':\n'`.
