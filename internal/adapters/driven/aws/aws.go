@@ -62,12 +62,16 @@ func newStore(client api, cfg Config) *Store {
 }
 
 func (s *Store) Get(ctx context.Context, key domain.Key) (domain.Secret, error) {
-	res, err := s.client.GetSecretValue(ctx, &secretmanager.GetSecretValueInput{SecretId: aws.String(key.String())})
+	res, err := s.client.GetSecretValue(ctx, &secretmanager.GetSecretValueInput{SecretId: aws.String(name)})
 	if err != nil {
-		return domain.Secret{}, err
+		return domain.Secret{}, wrap(err, "get %s", key)
 	}
-
-	return domain.NewSecret(domain.SecretMeta{Key: key, CreatedAt: *res.CreatedDate}, res.SecretBinary)
+	val := res.SecretBinary
+	if val == nil && res.SecretString != nil {
+		val = []byte(*res.SecretString)
+	}
+	meta := domain.SecretMeta{Key: key, Version: version(res.VersionId), CreatedAt: aws.ToTime(res.CreatedDate)}
+	return domain.NewSecret(meta, val)
 }
 
 func (s *Store) Put(ctx context.Context, key domain.Key, value []byte) (domain.SecretMeta, error)

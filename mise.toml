@@ -1,2 +1,8 @@
 [tools]
 go = "latest"
+
+[tasks.test]
+run = "go test ./..."
+
+[tasks.lint]
+run = "golangci-lint run"

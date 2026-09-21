@@ -1,0 +1,10 @@
+{
+  "name": "vaultlet",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+
+  "features": {
+    "ghcr.io/devcontainers-extra/features/mise:1": {}
+  },
+
+  "postCreateCommand": "mise install"
+}
