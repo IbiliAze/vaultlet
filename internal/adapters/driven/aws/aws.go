@@ -5,7 +5,19 @@ import (
 
 	"github.com/IbiliAze/vaultlet/internal/domain"
 	"github.com/IbiliAze/vaultlet/internal/ports"
+	secretmanager "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 )
+
+type api interface {
+	GetSecretValue()
+	CreateSecret()
+	PutSecretValue()
+	DescribeSecret()
+	ListSecrets()
+	DeleteSecret()
+}
+
+type sdkClient struct{ c *secretmanager.Client }
 
 type Store struct {
 }
