@@ -5,6 +5,7 @@ import (
 
 	"github.com/IbiliAze/vaultlet/internal/domain"
 	"github.com/IbiliAze/vaultlet/internal/ports"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	secretmanager "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 )
 
@@ -60,7 +61,14 @@ func newStore(client api, cfg Config) *Store {
 	}
 }
 
-func (s *Store) Get(ctx context.Context, key domain.Key) (domain.Secret, error)
+func (s *Store) Get(ctx context.Context, key domain.Key) (domain.Secret, error) {
+	res, err := s.client.GetSecretValue(ctx, &secretmanager.GetSecretValueInput{SecretId: aws.String(key.String())})
+	if err != nil {
+		return domain.Secret{}, err
+	}
+
+	return domain.NewSecret(domain.SecretMeta{Key: key, CreatedAt: *res.CreatedDate}, res.SecretBinary)
+}
 
 func (s *Store) Put(ctx context.Context, key domain.Key, value []byte) (domain.SecretMeta, error)
 
