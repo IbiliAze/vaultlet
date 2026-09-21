@@ -268,8 +268,68 @@ on `next_page_token`, so it can wait — but it will matter on a large org.
       and the README. Unit-tested against an in-memory fake with gRPC
       status codes; the real constructor was smoke-tested offline with a
       throwaway service-account key. Not verified against a live project.
-- [ ] AWS Secrets Manager. `internal/adapters/driven/aws/` is still empty.
-      Reuse `watch.Poll` for `Watch` as the other backends do.
+- [ ] AWS Secrets Manager. `internal/adapters/driven/aws/` is a stub
+      (unimplemented method signatures, empty `config.go`). Follow the
+      `gcp` layout: `config.go`, `name.go`, `aws.go`, tests.
+  - [ ] `config.go`: `Config{Region, Profile, Endpoint, PollInterval,
+        AllowWrites}` (koanf tags `region`, `profile`, `endpoint`,
+        `poll_interval`, `allow_writes`), `Validate()` requiring `region`
+        and a `poll_interval` above a `minPollInterval`. Credentials come
+        from the default AWS chain (env, shared config, SSO, IRSA, instance
+        role); `profile` overrides. `endpoint` allows LocalStack in tests.
+  - [ ] `name.go`: `encodeName`/`decodeName`. Secret names allow
+        `A-Za-z0-9/_+=.@-`, are case-sensitive, up to 512 chars. Decide
+        whether `/` can map straight through as the namespace separator
+        (likely, unlike Azure/GCP) and what to escape; keep the canonical
+        key in a `vaultlet-key` tag as the other backends do. Round-trip
+        tests including keys with `.`, `-`, `/` and the length limit.
+  - [ ] `aws.go`: define a narrow `api` interface over the SDK v2
+        `secretsmanager` client (GetSecretValue, CreateSecret,
+        PutSecretValue, DescribeSecret, ListSecrets, DeleteSecret) plus an
+        `sdkClient` adapter, so tests use an in-memory fake (as in `gcp`).
+        `New(ctx, cfg)` and `newStore(client, cfg)` split; add
+        `github.com/aws/aws-sdk-go-v2/{config,service/secretsmanager}` to
+        `go.mod`.
+  - [ ] `Get`: `GetSecretValue` (latest, `AWSCURRENT`). Use `VersionId` as
+        the version. Handle `SecretString` vs `SecretBinary`.
+        `ResourceNotFoundException` -> `ErrNotFound`. A secret scheduled
+        for deletion returns `InvalidRequestException`; map it to
+        `ErrNotFound`.
+  - [ ] `Put`: gated by `allow_writes`. `PutSecretValue` first; on
+        `ResourceNotFoundException` `CreateSecret` with the `vaultlet-key`
+        tag. Handle the create race (`ResourceExistsException` -> retry
+        `PutSecretValue`) and a secret pending deletion (restore or
+        surface a clear error; decide).
+  - [ ] `List`: `ListSecrets` paginated with a `name` prefix filter for
+        the namespace, skipping foreign secrets (no `vaultlet-key` tag) and
+        those pending deletion. The listing carries no current version ID,
+        only `LastChangedDate`, and `DescribeSecret` /
+        `ListSecretVersionIds` costs `1 + N`; check whether
+        `LastChangedDate` is a sufficient version for `watch.Poll` and
+        avoid the extra calls if so. Never return values from list.
+  - [ ] `Delete`: gated by `allow_writes`. Default recovery window is 7-30
+        days, so a recreate right after delete fails. Add a
+        `force_delete` (`ForceDeleteWithoutRecovery`) option, or
+        `recovery_window_days`, analogous to Azure's `purge_on_delete`.
+  - [ ] `Watch`: `watch.Poll` over `List`, same as the others. Note
+        Secrets Manager API throttling when choosing the `poll_interval`
+        default.
+  - [ ] Error mapping: `wrap`/`code` helpers using `smithy.APIError` codes
+        (`ResourceNotFoundException`, `ResourceExistsException`,
+        `AccessDeniedException`, `ThrottlingException`), no secret values
+        in error strings.
+  - [ ] Wire-up: `Config.AWS` in `internal/config/config.go`,
+        `case "aws"` in `newStore` (`cmd/vaultlet/main.go`), validation in
+        config load, an `aws:` block in `vaultlet.example.yml`, and README
+        (backend list, IAM permissions needed, and the naming scheme).
+  - [ ] Tests (`aws_test.go`, `name_test.go`): fake-client tests for
+        paging, encoding round-trip, foreign secrets skipped, put create
+        vs update, race on create, delete with and without force, pending
+        deletion, `allow_writes=false`, and watch diffs.
+  - [ ] Verify live (or against LocalStack): put, get, list across a page
+        boundary (>100 secrets), delete then recreate, and a watch that
+        sees an edit made in the console. Then update this list and the
+        priority order below.
 - [ ] Verify Azure live: put, get, list across a page boundary (>25
       secrets), delete with and without `purge_on_delete`, and a watch that
       sees an edit made in the portal.
